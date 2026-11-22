@@ -12,7 +12,8 @@
 | F10-H1 | A LiveKit call disconnects removed guests and ends for the host | RTC smoke test |
 | F11-H1 | Two clients exchange encrypted tracks and in-room data | RTC smoke test |
 | F13-E1 | A competing note save returns a conflict instead of overwriting newer data | API tests |
-| F06-P1 | Physical display share selection, physical devices, and off-LAN TURN | Platform and deployment verification |
+| F06-H1 | A toolbar click opens the Windows capture source picker | Desktop smoke test |
+| F06-P1 | Physical display capture, physical devices, and off-LAN TURN | Platform and deployment verification |
 | F04-H1 | Weekly schedule is atomic and rescheduling requires host ownership | API tests |
 | F22-H1 | Eligible guests can vote once and cannot open or close polls | API tests |
 | F17-H1 | Admitted guests can draw and only the host can clear the board | API tests |

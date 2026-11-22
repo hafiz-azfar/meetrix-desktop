@@ -12,7 +12,7 @@ let activeOrigin;
 let startupNotice = '';
 let changing = false;
 const settingsFile = join(__dirname, 'connect.html');
-const localOrigin = 'http://localhost:4317';
+const localOrigin = 'http://127.0.0.1:4317';
 let configPath;
 
 function originOf(value) {
@@ -38,12 +38,13 @@ function sameOrigin(value, origin) {
 }
 
 function configureSession(browserSession, origin) {
-  browserSession.setPermissionCheckHandler((contents, permission, requestingOrigin) =>
-    ['media', 'clipboard-sanitized-write'].includes(permission) && sameOrigin(requestingOrigin, origin) && sameOrigin(contents?.getURL(), origin));
+  browserSession.setPermissionCheckHandler((contents, permission, requestingOrigin, details) =>
+    details.isMainFrame && ['media', 'display-capture', 'clipboard-sanitized-write'].includes(permission)
+      && sameOrigin(requestingOrigin, origin) && sameOrigin(contents?.getURL(), origin));
   browserSession.setPermissionRequestHandler((contents, permission, callback, details) => {
     const fromWorkspace = details.isMainFrame && sameOrigin(details.requestingUrl, origin) && sameOrigin(contents.getURL(), origin);
     const media = permission === 'media' && details.mediaTypes?.every(type => type === 'audio' || type === 'video');
-    const allowed = fromWorkspace && (media || permission === 'clipboard-sanitized-write');
+    const allowed = fromWorkspace && (media || permission === 'display-capture' || permission === 'clipboard-sanitized-write');
     callback(Boolean(allowed));
   });
   browserSession.setDisplayMediaRequestHandler(async (request, callback) => {

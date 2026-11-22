@@ -37,7 +37,7 @@ async function waitForLiveKit(child, url) {
   throw new Error('The local LiveKit server did not start.');
 }
 
-async function startLocal({ directory, runtime, origin = 'http://localhost:4317', dependencies, testInstance }) {
+async function startLocal({ directory, runtime, origin = 'http://127.0.0.1:4317', dependencies, testInstance }) {
   let instance = testInstance;
   if (!instance) {
     try { instance = JSON.parse(await readFile(join(runtime, 'local-instance.json'), 'utf8')); }
@@ -46,12 +46,13 @@ async function startLocal({ directory, runtime, origin = 'http://localhost:4317'
   if (!instance?.clerkPublishableKey) return null;
   await mkdir(directory, { recursive: true });
   const port = await freeTcpPort();
+  const rtcTcp = await freeTcpPort();
   const udp = await freeUdpPort();
   const key = 'MK_' + randomBytes(12).toString('hex');
   const secret = randomBytes(32).toString('hex');
   const configPath = join(directory, 'livekit.yaml');
   await writeFile(configPath, [
-    'port: ' + port, 'bind_addresses: ["127.0.0.1"]', 'rtc:', '  tcp_port: 0',
+    'port: ' + port, 'bind_addresses: ["127.0.0.1"]', 'rtc:', '  tcp_port: ' + rtcTcp,
     '  udp_port: ' + udp, '  node_ip: 127.0.0.1', '  use_external_ip: false', '  enable_loopback_candidate: true',
     'room:', '  auto_create: false', '  enable_remote_unmute: false', 'keys:', '  ' + key + ': ' + secret, '',
   ].join('\n'), { mode: 0o600 });
