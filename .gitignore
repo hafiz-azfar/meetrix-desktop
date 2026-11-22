@@ -1,0 +1,12 @@
+/.env*
+!/.env.example
+/node_modules/
+/dist/
+/release/
+/data/
+/vendor/
+/replica/screens/
+/test-results/
+*.sqlite*
+*.pem
+*.key

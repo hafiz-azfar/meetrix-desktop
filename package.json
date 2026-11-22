@@ -1,0 +1,82 @@
+{
+  "name": "meetrix-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Open-source meeting rooms for Windows and the web",
+  "main": "desktop/main.cjs",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "dev": "node --env-file-if-exists=.env --watch server/index.mjs --dev",
+    "start": "node --env-file-if-exists=.env server/index.mjs",
+    "build": "vite build",
+    "test": "node --test test/*.test.mjs",
+    "desktop": "electron .",
+    "dist": "npm run stage:runtime && npm run build && electron-builder --win nsis --x64 --publish never",
+    "stage:runtime": "node --env-file-if-exists=.env scripts/stage-runtime.mjs",
+    "dist:local": "npm run stage:runtime -- --local-clerk && npm run build && electron-builder --win nsis --x64 --publish never"
+  },
+  "engines": {
+    "node": ">=22.15.0"
+  },
+  "build": {
+    "appId": "dev.meetrix.desktop",
+    "productName": "Meetrix",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "desktop/**/*",
+      "server/**/*",
+      "dist/**/*",
+      "package.json",
+      "LICENSE"
+    ],
+    "extraResources": [
+      {
+        "from": "vendor/runtime",
+        "to": "runtime",
+        "filter": [
+          "*"
+        ]
+      }
+    ],
+    "asar": true,
+    "win": {
+      "target": "nsis",
+      "artifactName": "Meetrix-Setup-${version}-${arch}.${ext}",
+      "icon": "desktop/icon.ico",
+      "signExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "dependencies": {
+    "@clerk/react": "6.19.4",
+    "@livekit/components-react": "2.9.26",
+    "express": "5.3.0",
+    "express-rate-limit": "8.7.5",
+    "helmet": "8.3.0",
+    "jose": "6.2.18",
+    "livekit-client": "2.25.0",
+    "livekit-server-sdk": "2.20.1",
+    "lucide-react": "1.77.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "6.3.0",
+    "electron": "45.4.1",
+    "electron-builder": "26.18.0",
+    "playwright": "1.65.1",
+    "vite": "8.3.8"
+  },
+  "author": "Meetrix contributors",
+  "overrides": {
+    "minimatch@>=7.0.0 <11.0.1": "11.0.1"
+  }
+}

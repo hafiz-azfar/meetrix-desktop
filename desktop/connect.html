@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en"><head><meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="./connect.css"><script defer src="./connect.js"></script>
+<title>Connect Meetrix</title></head>
+<body><main>
+  <header><span aria-hidden="true">◎</span><strong>Meetrix</strong></header>
+  <h1>Connect to a workspace</h1>
+  <p>Enter the HTTPS address of the Meetrix server you trust.</p>
+  <form><label for="server">Server address</label><input id="server" type="url" placeholder="https://meet.example.com" required><button type="submit">Connect</button></form>
+  <button type="button" class="secondary" id="local" hidden>Open local workspace</button>
+  <p id="notice" role="status"></p>
+</main></body></html>

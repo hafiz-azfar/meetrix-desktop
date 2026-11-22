@@ -1,0 +1,13 @@
+# Security model
+
+Meetrix is an early release. Its security model has the following boundaries and operational requirements.
+
+- The server pins Clerk's token issuer and authorized web origin, verifies RS256 and expiration claims, and derives identity from the verified session. The renderer receives the Clerk publishable key and short-lived, room-specific LiveKit grants.
+- Host operations use application-level ownership checks. The lobby and passcode gate token issuance. The API caps request sizes, validates request schemas, and rate-limits callers. Passcodes use salted scrypt. Meeting operations are serialized within the application process.
+- Notes, poll ballots, and whiteboard content are stored in SQLite for standard rooms. Encrypt the host's disk or persistent volume as appropriate. Protect database backups and apply a retention policy. Run a single backend process for a workspace so the room queues and limits are coherent.
+- Electron content runs in a sandbox with context isolation. Node integration and cross-origin navigation are disabled in the workspace window. The settings window exposes only two fixed IPC operations. Screen sharing requires a user-selected source. The local service binds to loopback.
+- Encrypted rooms use LiveKit's encrypted media and data channels. The host distributes a random room key out of band. The app never sends that key to its server. Signaling, metadata, account traffic, and host operations follow the deployment's ordinary transport protections. A modified client with a valid token can publish its own unencrypted tracks. Keep invite and key access limited to trusted participants.
+- Self-managed LiveKit can accept a previously issued unexpired token after removal. Use LiveKit Cloud for provider-side revocation or account for the documented short token replay window. Terminate TLS at a trusted proxy for hosted deployments and restrict direct access to your application listener.
+- A 100-participant limit is configured. High-scale calls, production availability, and cross-network TURN behavior need independent load and deployment verification. Code signing and independent security assessment remain release work.
+
+For a security report, use the repository's private vulnerability reporting option if it is available. Avoid including credentials, participant identities, private invitation links, or meeting content in a public report.
