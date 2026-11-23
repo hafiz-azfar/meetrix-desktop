@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { ArrowUpRight, CalendarDays, Mic, Video } from 'lucide-react';
 import { ApproveDesktop, DesktopBrowserSignIn, DesktopSignOut, desktopRequest } from './desktop-auth.jsx';
 import { SignInForm } from './insforge-sign-in.jsx';
-import { Workspace } from './workspace.jsx';
+import { GuestMeeting, Workspace } from './workspace.jsx';
 import { Logo } from './ui.jsx';
 import './style.css';
 
@@ -16,7 +16,7 @@ const joinCode = /^[A-Za-z0-9_-]{16}$/.test(params.get('m') ?? '') ? params.get(
 const continueTo = approvalPage ? '/desktop-sign-in?request=' + encodeURIComponent(requestId)
   : joinCode ? '/join?m=' + encodeURIComponent(joinCode) : '/';
 
-function Login({ onSignedIn }) {
+function Login({ onSignedIn, onGuest }) {
   const [methods, setMethods] = useState(null);
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
@@ -41,19 +41,21 @@ function Login({ onSignedIn }) {
       </div>
       <div className="login-caption">{isDesktop || approvalPage ? 'Meetrix for Windows' : 'Meetrix'} <ArrowUpRight size={15} /></div>
     </section>
-    <section className="login-form" aria-label="Sign-in options">
+    <section className="login-form" aria-label="Sign-in options"><div className="login-actions">
+      {!approvalPage && <button className="button" onClick={onGuest}>Join as a guest</button>}
       {error ? <section className="sign-in-card"><p className="error" role="alert">{error}</p>
         <button className="button" onClick={() => { setError(''); setRetry(count => count + 1); }}>Try again</button></section>
       : methods ? isDesktop ? <DesktopBrowserSignIn onSignedIn={onSignedIn} providers={methods.providers} />
         : <SignInForm methods={methods} continueTo={continueTo} onSignedIn={onSignedIn} />
       : <p role="status">Loading sign-in methods…</p>}
-    </section>
+    </div></section>
   </main>;
 }
 
 function App() {
   const [status, setStatus] = useState({});
   const [user, setUser] = useState(null);
+  const [guest, setGuest] = useState(false);
   useEffect(() => {
     const control = new AbortController();
     Promise.all([
@@ -70,7 +72,8 @@ function App() {
     return <div className="boot"><Logo /><p role={status.error ? 'alert' : 'status'}>{status.error || 'Opening your workspace…'}</p>
       {status.error && <button className="button" onClick={() => location.reload()}>Try again</button>}</div>;
   }
-  if (!user) return <Login onSignedIn={isDesktop ? setUser : () => location.replace(continueTo)} />;
+  if (!user && guest) return <GuestMeeting code={joinCode || ''} onBack={() => setGuest(false)} />;
+  if (!user) return <Login onSignedIn={isDesktop ? setUser : () => location.replace(continueTo)} onGuest={() => setGuest(true)} />;
   if (approvalPage) return <ApproveDesktop requestId={requestId} user={user} onSignedOut={setUser} />;
   return <Workspace config={status.config} user={user} accountControl={<DesktopSignOut onSignedOut={setUser} />} />;
 }

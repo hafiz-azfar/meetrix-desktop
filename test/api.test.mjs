@@ -110,6 +110,45 @@ test('weekly occurrences are created together and only the host can reschedule a
   assert.equal((await api(path, { method: 'PATCH', body })).status, 409);
 });
 
+test('accountless guests need host opt-in, the passcode, and admission for each meeting', async t => {
+  const { api, create, connect, moderate } = await fixture(t);
+  const proof = 'cf32b52d0e134150b3ccf8c27bc23e46';
+  const guestJoin = (id, body = {}, userOrigin) => api('/meetings/' + id + '/guest', {
+    method: 'POST', token: '', body: { name: 'Accountless guest', proof, ...body }, userOrigin,
+  });
+  assert.equal((await create({ allowGuests: true, lobby: false })).status, 400);
+  const accountsOnly = (await create({})).json;
+  assert.equal((await guestJoin(accountsOnly.id)).status, 403);
+
+  const meeting = (await create({ allowGuests: true, passcode: 'test passcode' })).json;
+  assert.equal((await guestJoin(meeting.id, { passcode: 'wrong passcode' })).status, 403);
+  assert.equal((await guestJoin(meeting.id, { passcode: 'test passcode' }, 'https://other.test')).status, 403);
+  const waiting = await guestJoin(meeting.id, { passcode: 'test passcode' });
+  assert.deepEqual(waiting.json, { state: 'waiting', hostPresent: false });
+  const lobby = (await api('/meetings/' + meeting.id + '/lobby')).json;
+  assert.equal(lobby.guests.length, 1);
+  assert.equal(lobby.guests[0].accountless, true);
+  const { identity } = lobby.guests[0];
+  await connect(meeting.id, 'owner');
+  assert.equal((await guestJoin(meeting.id)).json.state, 'waiting');
+  assert.equal((await moderate(meeting.id, { action: 'decide', identity, admit: true })).status, 200);
+  const admitted = (await guestJoin(meeting.id)).json;
+  assert.equal(admitted.accountless, true);
+  assert.equal(admitted.meeting.isHost, false);
+  const claims = await new TokenVerifier(livekitKey, livekitSecret).verify(admitted.token);
+  assert.equal(claims.sub, identity);
+  assert.equal(claims.video.room, meeting.id);
+  assert.ok(!claims.video.roomAdmin && !claims.video.roomCreate && !claims.video.roomRecord);
+  assert.equal((await api('/meetings/' + meeting.id + '/notes', { token: '' })).status, 401);
+
+  const other = (await create({ allowGuests: true })).json;
+  assert.equal((await guestJoin(other.id)).json.state, 'waiting');
+  const otherLobby = (await api('/meetings/' + other.id + '/lobby')).json;
+  assert.notEqual(otherLobby.guests[0].identity, identity);
+  assert.equal((await moderate(meeting.id, { action: 'remove', identity })).status, 200);
+  assert.equal((await guestJoin(meeting.id)).status, 403);
+});
+
 test('poll ballots and board strokes are scoped to admitted participants', async t => {
   const { api, create, connect } = await fixture(t);
   const meeting = (await create({ lobby: false })).json;

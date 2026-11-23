@@ -5,6 +5,7 @@
 - Desktop sign-in uses the system browser. An authenticated browser session must approve a short-lived pairing code, and only the requesting app can redeem the request. The app opens a browser URL built from the active workspace origin.
 - Electron content runs in a sandbox with context isolation and guarded navigation. The settings window exposes a limited connection interface. The local server binds to loopback.
 - Host controls check meeting ownership. Passcodes use salted scrypt. The API validates bodies, rate-limits requests, and issues 50-second initial room grants.
+- Accountless attendance requires explicit host opt-in and waiting room admission. A tab keeps a random proof scoped to the meeting. The guest endpoint gives admitted invitees a LiveKit room grant. Workspace APIs, including stored notes, polls, and whiteboards, still require an account.
 - Notes, poll ballots, and whiteboards are stored in SQLite for standard rooms. Protect the storage volume and backups. Use one backend process for a workspace to keep moderation queues and limits coherent.
 - Encrypted rooms use LiveKit media and data encryption. The host distributes the random key separately. Signaling and meeting metadata are still visible to the deployment. Modified clients can publish unencrypted tracks.
 - Self-managed LiveKit can accept a previously issued unexpired token after removal. LiveKit Cloud offers provider-side revocation. Hosted deployments require HTTPS and WSS.

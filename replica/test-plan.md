@@ -9,7 +9,10 @@
 | F02-H1 | Host creates and opens a LiveKit room | Desktop and RTC smoke tests |
 | F03-N1 | Missing/wrong passcode and invalid sessions cannot obtain a grant | API tests |
 | F03-H1 | Guest waits, host admits, then guest connects | RTC smoke test |
+| F03-H2 | An invitee without an account enters an opted-in meeting and receives video after host admission | `node test/smoke-guest-meeting.mjs` |
+| F03-N2 | Guest access needs a waiting room, honors passcodes, and is scoped to a single room | API tests |
 | F05-H1 | A remote client receives video frames, audio tracks, and a data message | RTC smoke test |
+| F23-H1 | The host changes camera devices during a call and the guest still receives video | Guest-meeting smoke test with synthetic devices |
 | F09-N1 | Guests cannot moderate or access private notes; host locks and ends a room | API tests |
 | F10-H1 | A LiveKit call disconnects removed guests and ends for the host | RTC smoke test |
 | F11-H1 | Two clients exchange encrypted tracks and in-room data | RTC smoke test |

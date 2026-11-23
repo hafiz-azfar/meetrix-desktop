@@ -8,9 +8,9 @@ import { apiFor, calendarInvite, invitation, parseInvitation } from './api.js';
 import { generateRoomKey, validRoomKey } from './encryption.js';
 import { Logo, Dialog } from './ui.jsx';
 import { Notes } from './notes.jsx';
+import { captureOptions, DeviceFields, useDevicePreferences } from './media-devices.jsx';
 
 const Conference = lazy(() => import('./conference.jsx').then(module => ({ default: module.Conference })));
-const defaults = { camera: false, microphone: false, cameraId: '', microphoneId: '' };
 const panels = [
   { id: 'home', title: 'Overview', icon: House },
   { id: 'meetings', title: 'Meetings', icon: CalendarDays },
@@ -19,11 +19,6 @@ const panels = [
 const dateLabel = new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
 const timeLabel = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 const inviteCode = new URLSearchParams(location.search).get('m');
-
-function getPrefs() {
-  try { return { ...defaults, ...JSON.parse(localStorage.getItem('meetrix-devices') || '{}') }; }
-  catch { return defaults; }
-}
 
 function localDateValue(time) {
   const local = new Date(time - new Date(time).getTimezoneOffset() * 60000);
@@ -53,7 +48,8 @@ function MeetingForm({ mode, meeting, api, name, close, onCreated }) {
         additionalStarts.push(occurrence.toISOString());
       }
       const created = await api('/meetings', { method: 'POST', body: {
-        ...details, name, additionalStarts, lobby: form.get('lobby') === 'on', encrypted: form.get('encrypted') === 'on',
+        ...details, name, additionalStarts, lobby: form.get('lobby') === 'on', allowGuests: form.get('allowGuests') === 'on',
+        encrypted: form.get('encrypted') === 'on',
         ...(form.get('passcode') ? { passcode: form.get('passcode') } : {}),
       } });
       onCreated(created, scheduled);
@@ -70,6 +66,7 @@ function MeetingForm({ mode, meeting, api, name, close, onCreated }) {
       {mode === 'schedule' && <label>Repeat<select name="repeats"><option value="1">One time</option><option value="4">Weekly, 4 occurrences</option><option value="8">Weekly, 8 occurrences</option><option value="12">Weekly, 12 occurrences</option></select></label>}
       {mode !== 'edit' && <><label>Passcode <span className="muted">(optional)</span><input name="passcode" type="password" autoComplete="new-password" minLength={8} maxLength={128} placeholder="At least 8 characters" /></label>
       <label className="check"><input type="checkbox" name="lobby" defaultChecked /><span><strong>Waiting room</strong><small>Admit each guest before they join.</small></span></label>
+      <label className="check"><input type="checkbox" name="allowGuests" /><span><strong>Allow guests without an account</strong><small>The waiting room must be enabled.</small></span></label>
       <label className="check"><input type="checkbox" name="encrypted" /><span><strong>End-to-end encrypted room</strong><small>Share a separate room key with guests. Server-stored collaboration is disabled.</small></span></label></>}
       {error && <p className="error" role="alert">{error}</p>}
       <div className="dialog-actions"><button className="button" type="button" onClick={close}>Cancel</button><button className="button primary" disabled={working}>{working ? 'Saving…' : mode === 'edit' ? 'Save changes' : mode === 'schedule' ? 'Schedule' : 'Continue'}</button></div>
@@ -77,16 +74,21 @@ function MeetingForm({ mode, meeting, api, name, close, onCreated }) {
   </Dialog>;
 }
 
-function JoinForm({ code, close, onJoin }) {
+function JoinForm({ code, close, onJoin, guest = false }) {
   const [error, setError] = useState('');
   return <Dialog title="Join a meeting" close={close}>
     <form className="form" onSubmit={event => {
       event.preventDefault();
       const form = new FormData(event.currentTarget);
-      try { onJoin({ id: parseInvitation(form.get('code')), passcode: form.get('passcode') }); }
+      try {
+        const name = guest ? form.get('name').trim() : undefined;
+        if (guest && !name) throw new Error('Enter your display name.');
+        onJoin({ id: parseInvitation(form.get('code')), passcode: form.get('passcode'), name });
+      }
       catch (failure) { setError(failure.message); }
     }}>
-      <label>Meeting link or code<input name="code" autoFocus required defaultValue={code} maxLength={300} /></label>
+      <label>Meeting link or code<input name="code" autoFocus={!guest || !code} required defaultValue={code} maxLength={300} /></label>
+      {guest && <label>Display name<input name="name" autoFocus={Boolean(code)} required maxLength={60} autoComplete="name" /></label>}
       <label>Passcode <span className="muted">(if required)</span><input name="passcode" type="password" autoComplete="off" minLength={8} maxLength={128} /></label>
       {error && <p className="error" role="alert">{error}</p>}
       <div className="dialog-actions"><button className="button" type="button" onClick={close}>Cancel</button><button className="button primary">Continue <ArrowRight size={16} /></button></div>
@@ -94,7 +96,7 @@ function JoinForm({ code, close, onJoin }) {
   </Dialog>;
 }
 
-function Preflight({ target, prefs, updatePrefs, api, name, close, onConnected }) {
+function Preflight({ target, prefs, updatePrefs, api, name, close, onConnected, guest = false }) {
   const [phase, setPhase] = useState('preview');
   const [needsKey, setNeedsKey] = useState(Boolean(target.encrypted));
   const [roomKey, setRoomKey] = useState('');
@@ -106,7 +108,7 @@ function Preflight({ target, prefs, updatePrefs, api, name, close, onConnected }
     if (!prefs.camera || phase === 'connecting') return;
     let cancelled = false;
     let stream;
-    navigator.mediaDevices.getUserMedia({ video: prefs.cameraId ? { deviceId: { exact: prefs.cameraId } } : true })
+    Promise.resolve().then(() => navigator.mediaDevices.getUserMedia({ video: captureOptions(prefs.cameraId) }))
       .then(value => {
         stream = value;
         if (cancelled) value.getTracks().forEach(track => track.stop());
@@ -120,8 +122,8 @@ function Preflight({ target, prefs, updatePrefs, api, name, close, onConnected }
     let timer;
     async function connect() {
       try {
-        const result = await api('/meetings/' + target.id + '/connect', {
-          method: 'POST', body: { name, ...(validRoomKey(roomKey) ? { keyReady: true } : {}), ...(target.passcode ? { passcode: target.passcode } : {}) },
+        const result = await api('/meetings/' + target.id + (guest ? '/guest' : '/connect'), {
+          method: 'POST', body: { name, ...(guest ? { proof: target.proof } : {}), ...(validRoomKey(roomKey) ? { keyReady: true } : {}), ...(target.passcode ? { passcode: target.passcode } : {}) },
         });
         if (cancelled) return;
         if (result.state === 'ready') onConnected({ ...result, ...(result.meeting.encrypted ? { roomKey } : {}) });
@@ -137,7 +139,7 @@ function Preflight({ target, prefs, updatePrefs, api, name, close, onConnected }
     if (phase === 'connecting') connect();
     else timer = setTimeout(connect, 4500);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [phase, api, target, name, onConnected, roomKey]);
+  }, [phase, api, target, name, onConnected, roomKey, guest]);
   const pending = phase !== 'preview';
   return <Dialog title={target.title || 'Check your setup'} close={close}>
     <div className="preview">
@@ -149,6 +151,9 @@ function Preflight({ target, prefs, updatePrefs, api, name, close, onConnected }
       <button className={'button' + (prefs.camera ? ' selected' : '')} onClick={() => updatePrefs({ camera: !prefs.camera })}><Video size={17} /> Camera {prefs.camera ? 'on' : 'off'}</button>
     </div>
     {cameraFailure && prefs.camera && <p className="muted">{cameraFailure}</p>}
+    <details className="preflight-devices"><summary>Audio and video devices</summary>
+      <DeviceFields prefs={prefs} changeDevice={({ key }, value) => updatePrefs({ [key + 'Id']: value })} />
+    </details>
     {needsKey && <div className="key-box"><label htmlFor="room-key">Room encryption key</label><input id="room-key" type="password" autoComplete="off" value={roomKey} onChange={event => { setRoomKey(event.target.value.trim()); setKeyCopied(false); }} maxLength={43} disabled={pending} />
       {target.isHost ? <div className="preflight-controls"><button className="button" disabled={pending} onClick={() => { setRoomKey(generateRoomKey()); setKeyCopied(false); }}>Generate key</button><button className="button" disabled={!validRoomKey(roomKey)} onClick={async () => { try { await navigator.clipboard.writeText(roomKey); setKeyCopied(true); } catch { setFailure('Could not copy the key.'); } }}>{keyCopied ? 'Key copied' : 'Copy key'}</button></div> : <p className="muted">Ask the host for this key over a separate secure channel.</p>}
     </div>}
@@ -159,43 +164,38 @@ function Preflight({ target, prefs, updatePrefs, api, name, close, onConnected }
 }
 
 function DeviceSettings({ prefs, updatePrefs }) {
-  const [devices, setDevices] = useState([]);
-  const [notice, setNotice] = useState('');
-  async function scan() {
-    try { setDevices(await navigator.mediaDevices.enumerateDevices()); }
-    catch { setNotice('Devices could not be read on this computer.'); }
-  }
-  useEffect(() => {
-    scan();
-    const media = navigator.mediaDevices;
-    media?.addEventListener('devicechange', scan);
-    return () => media?.removeEventListener('devicechange', scan);
-  }, []);
-  async function requestDevices() {
-    setNotice('');
-    const results = await Promise.allSettled([
-      navigator.mediaDevices.getUserMedia({ audio: true }),
-      navigator.mediaDevices.getUserMedia({ video: true }),
-    ]);
-    results.forEach(result => { if (result.status === 'fulfilled') result.value.getTracks().forEach(track => track.stop()); });
-    if (results.some(result => result.status === 'rejected')) setNotice('Some devices are unavailable or blocked by system permissions.');
-    await scan();
-  }
   return <div className="settings-card">
     <div className="section-header"><div><h2>Audio and video</h2><p>Set your defaults before entering a room.</p></div><AudioLines size={23} /></div>
-    <div className="settings-fields">
-      {[['microphone', 'audioinput', 'Microphone', Mic], ['camera', 'videoinput', 'Camera', Video]].map(([field, kind, title, Icon]) =>
-        <div className="settings-row" key={field}><div><Icon size={18} /><strong>{title}</strong></div>
-          <select aria-label={title + ' device'} value={prefs[field + 'Id']} onChange={e => updatePrefs({ [field + 'Id']: e.target.value })}>
-            <option value="">System default</option>
-            {devices.filter(device => device.kind === kind && device.deviceId && device.deviceId !== 'default').map((device, index) => <option key={device.deviceId} value={device.deviceId}>{device.label || title + ' ' + (index + 1)}</option>)}
-          </select>
-          <label className="check"><input type="checkbox" checked={prefs[field]} onChange={e => updatePrefs({ [field]: e.target.checked })} /> Start on</label>
-        </div>)}
-    </div>
-    <button className="button" onClick={requestDevices}>Detect devices</button>
-    {notice && <p className="muted" role="status">{notice}</p>}
+    <DeviceFields prefs={prefs} changeDevice={({ key }, value) => updatePrefs({ [key + 'Id']: value })}
+      showDefaults updatePrefs={updatePrefs} />
   </div>;
+}
+
+export function GuestMeeting({ code, onBack }) {
+  const api = useMemo(apiFor, []);
+  const [prefs, updatePrefs] = useDevicePreferences();
+  const [target, setTarget] = useState(null);
+  const [session, setSession] = useState(null);
+
+  function enter(details) {
+    const key = 'meetrix-guest-' + details.id;
+    let proof = crypto.randomUUID().replaceAll('-', '');
+    try {
+      const saved = sessionStorage.getItem(key);
+      if (/^[a-f0-9]{32}$/.test(saved ?? '')) proof = saved;
+      sessionStorage.setItem(key, proof);
+    } catch { /* The guest can still join for the lifetime of this page. */ }
+    setTarget({ ...details, proof });
+  }
+
+  if (session) return <Suspense fallback={<div className="boot"><Logo /><p>Opening your room…</p></div>}>
+    <Conference session={session} api={api} prefs={prefs} updatePrefs={updatePrefs} onLeave={onBack} />
+  </Suspense>;
+  return <main className="boot"><Logo />
+    {target ? <Preflight guest target={target} api={api} name={target.name} prefs={prefs} updatePrefs={updatePrefs}
+      close={() => setTarget(null)} onConnected={setSession} />
+    : <JoinForm guest code={code} close={onBack} onJoin={enter} />}
+  </main>;
 }
 
 export function Workspace({ config, user, accountControl }) {
@@ -211,15 +211,7 @@ export function Workspace({ config, user, accountControl }) {
   const [editing, setEditing] = useState(null);
   const [archived, setArchived] = useState(null);
   const [session, setSession] = useState(null);
-  const [prefs, setPrefs] = useState(getPrefs);
-
-  function updatePrefs(changes) {
-    setPrefs(prior => {
-      const next = { ...prior, ...changes };
-      localStorage.setItem('meetrix-devices', JSON.stringify(next));
-      return next;
-    });
-  }
+  const [prefs, updatePrefs] = useDevicePreferences();
   function refresh() {
     setLoading(true);
     api('/meetings').then(setMeetings).catch(error => setNotice(error.message)).finally(() => setLoading(false));
@@ -247,7 +239,7 @@ export function Workspace({ config, user, accountControl }) {
     try { await navigator.clipboard.writeText(invitation(meeting.id)); setNotice('Meeting invite copied.'); }
     catch { setNotice('Meeting code: ' + meeting.id); }
   }
-  if (session) return <Suspense fallback={<div className="boot"><Logo /><p>Opening your room…</p></div>}><Conference session={session} api={api} prefs={prefs} onLeave={leave} /></Suspense>;
+  if (session) return <Suspense fallback={<div className="boot"><Logo /><p>Opening your room…</p></div>}><Conference session={session} api={api} prefs={prefs} updatePrefs={updatePrefs} onLeave={leave} /></Suspense>;
   const active = meetings.filter(meeting => !meeting.stoppedAt).toSorted((a, b) => a.startAt - b.startAt);
   const rows = page === 'home' ? active.slice(0, 5) : filter === 'past' ? meetings.filter(meeting => meeting.stoppedAt) : active;
   return <div className="workspace">

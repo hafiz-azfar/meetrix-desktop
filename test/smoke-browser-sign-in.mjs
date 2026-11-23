@@ -41,6 +41,10 @@ try {
     const config = await desktop.evaluate(() => fetch('/api/config').then(response => response.json()));
     assert.deepEqual({ desktop: config.desktop, mediaReady: config.mediaReady, provider: config.authProvider },
       { desktop: true, mediaReady: true, provider: 'insforge' });
+    await desktop.getByRole('button', { name: 'Join as a guest' }).click();
+    await desktop.getByLabel('Meeting link or code').waitFor();
+    await desktop.getByLabel('Display name').waitFor();
+    await desktop.getByRole('button', { name: 'Cancel', exact: true }).click();
 
     await app.evaluate(({ shell }) => {
       shell.openExternal = async url => { globalThis.meetrixBrowserTarget = url; };

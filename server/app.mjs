@@ -1,4 +1,4 @@
-import { randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import { resolve } from 'node:path';
 import express from 'express';
@@ -24,11 +24,13 @@ const schedule = z.object({
   duration: duration.default(60),
   additionalStarts: z.array(z.iso.datetime()).max(11).default([]),
   lobby: z.boolean().default(true),
+  allowGuests: z.boolean().default(false),
   encrypted: z.boolean().default(false),
   passcode: optionalPasscode,
 }).strict();
 const reschedule = z.object({ title: meetingTitle, startAt: z.iso.datetime(), duration }).strict();
 const join = z.object({ name: person, passcode: optionalPasscode, keyReady: z.boolean().optional() }).strict();
+const guestJoin = join.extend({ proof: z.string().regex(/^[a-f0-9]{32}$/) });
 const moderation = z.discriminatedUnion('action', [
   z.object({ action: z.literal('decide'), identity: participantIdentity, admit: z.boolean() }).strict(),
   z.object({ action: z.literal('lock'), locked: z.boolean() }).strict(),
@@ -147,6 +149,14 @@ export function createApp(options, dependencies = {}) {
   const authenticate = dependencies.authenticate ?? auth.currentIdentity;
   api.use('/auth', auth.router);
   api.use('/desktop-auth', desktopAuth.router);
+  api.post('/meetings/:id/guest', rateLimit({ ...limitOptions, limit: 45 }), async (req, res) => {
+    if (req.get('origin') !== origin) throw new RequestError(403, 'This origin is not allowed.');
+    const { proof, ...input } = guestJoin.parse(req.body);
+    const meeting = meetingFor(req);
+    if (!meeting.allow_guests || !meeting.lobby) throw new RequestError(403, 'Sign in to join this meeting.');
+    const identity = 'guest_' + createHash('sha256').update(meeting.id + ':' + proof).digest('base64url');
+    res.json(await connectMeeting(meeting, identity, input, true));
+  });
   async function bearerIdentity(req) {
     const token = /^Bearer ([A-Za-z0-9_.-]{1,4096})$/.exec(req.get('authorization') || '')?.[1];
     if (!token) throw new RequestError(401, 'Sign in to continue.');
@@ -228,18 +238,21 @@ export function createApp(options, dependencies = {}) {
 
   api.post('/meetings', byIdentity(20), async (req, res) => {
     const input = schedule.parse(req.body);
+    if (input.allowGuests && !input.lobby) {
+      throw new RequestError(400, 'Enable the waiting room to allow guests without an account.');
+    }
     const now = Date.now();
     const times = [input.startAt, ...input.additionalStarts].map(startAt => scheduledTime(startAt, now));
     if (times.some((time, index) => index && time <= times[index - 1])) {
       throw new RequestError(400, 'Recurring meeting times must be in order.');
     }
     const passcodes = input.passcode ? await Promise.all(times.map(() => encodePasscode(input.passcode))) : times.map(() => null);
-    const insert = db.prepare('INSERT INTO meetings(id, owner, owner_name, title, start_at, duration_minutes, created_at, lobby, passcode, encrypted) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    const insert = db.prepare('INSERT INTO meetings(id, owner, owner_name, title, start_at, duration_minutes, created_at, lobby, allow_guests, passcode, encrypted) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
     const ids = times.map(() => randomBytes(12).toString('base64url'));
     db.exec('BEGIN IMMEDIATE');
     try {
       ids.forEach((id, index) => {
-        insert.run(id, req.identity, input.name, input.title, times[index], input.duration, now, Number(input.lobby), passcodes[index], Number(input.encrypted));
+        insert.run(id, req.identity, input.name, input.title, times[index], input.duration, now, Number(input.lobby), Number(input.allowGuests), passcodes[index], Number(input.encrypted));
         log.run(id, req.identity, 'create', null, now);
       });
       db.exec('COMMIT');
@@ -263,51 +276,52 @@ export function createApp(options, dependencies = {}) {
     res.json(result);
   });
 
-  api.post('/meetings/:id/connect', byIdentity(34), async (req, res) => {
-    const input = join.parse(req.body);
-    const initial = meetingFor(req);
-    const isHost = initial.owner === req.identity;
-    const verified = !isHost && initial.passcode && !findGuest.get(initial.id, req.identity)
+  async function connectMeeting(initial, identity, input, accountless = false) {
+    const isHost = !accountless && initial.owner === identity;
+    const verified = !isHost && initial.passcode && !findGuest.get(initial.id, identity)
       ? await checkPasscode(input.passcode, initial.passcode) : true;
-    const result = await serial(initial.id, async () => {
+    return serial(initial.id, async () => {
       const current = findMeeting.get(initial.id);
       if (current.stopped_at || (current.opened_at && Date.now() - current.opened_at >= maxDuration)) {
         throw new RequestError(410, 'This meeting has ended.');
       }
       if (isHost && current.encrypted && !input.keyReady) return { state: 'key-required' };
       if (!isHost) {
-        let guest = findGuest.get(current.id, req.identity);
+        let guest = findGuest.get(current.id, identity);
         if (guest?.decision === 'denied') throw new RequestError(403, 'The host has declined your request.');
         if (current.locked) throw new RequestError(423, 'The host has locked the meeting.');
         if (!guest && !verified) throw new RequestError(403, 'Enter the correct meeting passcode.');
         if (!guest) {
           db.prepare('INSERT INTO attendance(meeting, identity, name, decision, requested_at) VALUES(?, ?, ?, ?, ?)')
-            .run(current.id, req.identity, input.name, current.lobby ? 'pending' : 'admitted', Date.now());
-          guest = findGuest.get(current.id, req.identity);
+            .run(current.id, identity, input.name, current.lobby ? 'pending' : 'admitted', Date.now());
+          guest = findGuest.get(current.id, identity);
         }
         if (!current.opened_at || guest.decision !== 'admitted') return { state: 'waiting', hostPresent: !!current.opened_at };
         if (current.encrypted && !input.keyReady) return { state: 'key-required' };
       } else if (!current.opened_at) {
         await media(client => client.createRoom({ name: current.id, emptyTimeout: 120, departureTimeout: 60, maxParticipants: 100 }));
         start.run(Date.now(), current.id);
-        log.run(current.id, req.identity, 'open', null, Date.now());
+        log.run(current.id, identity, 'open', null, Date.now());
       }
       if (!rooms) throw new RequestError(503, 'This server needs LiveKit configuration.');
       // Recreate an idle room with the same capacity after LiveKit expires it.
       if (current.opened_at) await media(client => client.createRoom({ name: current.id, emptyTimeout: 120, departureTimeout: 60, maxParticipants: 100 }));
-      const name = isHost ? current.owner_name : findGuest.get(current.id, req.identity).name;
-      const token = new AccessToken(livekitKey, livekitSecret, { identity: req.identity, name, ttl: '50s' });
+      const name = isHost ? current.owner_name : findGuest.get(current.id, identity).name;
+      const token = new AccessToken(livekitKey, livekitSecret, { identity, name, ttl: '50s' });
       token.addGrant({ roomJoin: true, room: current.id, canPublish: true, canSubscribe: true, canPublishData: true, canUpdateOwnMetadata: false });
-      return { state: 'ready', serverUrl: livekitUrl, token: await token.toJwt(), meeting: view(findMeeting.get(current.id), req.identity), hostIdentity: current.owner };
+      return { state: 'ready', serverUrl: livekitUrl, token: await token.toJwt(), meeting: view(findMeeting.get(current.id), identity), hostIdentity: current.owner, accountless };
     });
-    res.json(result);
+  }
+
+  api.post('/meetings/:id/connect', byIdentity(34), async (req, res) => {
+    res.json(await connectMeeting(meetingFor(req), req.identity, join.parse(req.body)));
   });
 
   api.get('/meetings/:id/lobby', (req, res) => {
     const meeting = meetingFor(req);
     requireHost(meeting, req.identity);
     const guests = db.prepare("SELECT identity, name, requested_at AS requestedAt FROM attendance WHERE meeting = ? AND decision = 'pending' ORDER BY requested_at LIMIT 100")
-      .all(meeting.id);
+      .all(meeting.id).map(guest => ({ ...guest, accountless: guest.identity.startsWith('guest_') }));
     res.json({ guests, locked: !!meeting.locked });
   });
 

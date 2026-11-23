@@ -19,7 +19,7 @@ npm ci
 npm run dist
 ```
 
-The installer is written to `release/Meetrix-InsForge-Setup-0.1.2-x64.exe`. To preconfigure the installer with a project, copy `.env.example` to `.env`, fill the InsForge settings, and run `npm run dist:local`. Use a public anon key for this build. Installer and executable signing are left to the distributor.
+The installer is written to `release/Meetrix-InsForge-Setup-0.1.3-x64.exe`. To preconfigure the installer with a project, copy `.env.example` to `.env`, fill the InsForge settings, and run `npm run dist:local`. If your project requires an anon key, use its public anon key. Installer and executable signing are left to the distributor.
 
 ## Host a workspace
 
@@ -35,14 +35,16 @@ Meetrix keys account ownership by the InsForge project and user ID. Earlier Cler
 
 - Instant and recurring meetings, links and meeting codes, plus iCalendar invitations.
 - Audio, video, gallery and speaker views, screen sharing, chat, and reactions.
+- Microphone, camera, and speaker selection before joining or from **Devices** during a call. Browser support determines speaker availability.
 - Host moderation, passcodes, room locks, waiting rooms, and participant removal.
+- Hosts can allow invitees without accounts. The waiting room still applies, and the host sees those invitees labeled as unverified guests.
 - Shared notes, polls, and whiteboards. Encrypted rooms use a shared, client-generated key for LiveKit media and in-room data.
 
 [Feature comparison](replica/parity.md) · [Security model](SECURITY.md)
 
 ## Verification
 
-Run `npm test`, `npm run build`, and `npm audit`. The API tests use the InsForge SDK with simulated upstream responses to exercise OAuth state, PKCE, workspace cookies, and desktop pairing. Use `node test/smoke-insforge-ui.mjs` to exercise the sign-in screen and pairing in Chromium with a simulated OAuth callback. The Windows smoke test can check a packaged trial with `node test/smoke-browser-sign-in.mjs`. With an InsForge project configured, it checks configured Google and GitHub redirects. Optional `MEETRIX_QA_EMAIL` and `MEETRIX_QA_PASSWORD` enable the complete test using an existing test account. Use `node test/smoke-rtc.mjs` for two-client LiveKit verification after staging the runtime.
+Run `npm test`, `npm run build`, and `npm audit`. The API tests exercise OAuth state, PKCE, workspace cookies, desktop pairing, and guest access. The Windows smoke test can check a packaged trial with `node test/smoke-browser-sign-in.mjs`. With an InsForge project configured, it checks configured Google and GitHub redirects. Optional `MEETRIX_QA_EMAIL` and `MEETRIX_QA_PASSWORD` enable the complete test using an existing test account. After staging the runtime, use `node test/smoke-rtc.mjs` for two-client LiveKit verification and `node test/smoke-guest-meeting.mjs` for the guest join and device-switching workflows.
 
 ## License
 

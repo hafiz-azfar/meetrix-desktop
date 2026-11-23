@@ -66,6 +66,7 @@
   .login-features span, .login-caption { display: inline-flex; align-items: center; gap: 8px; }
   .login-caption { color: var(--muted); font-size: .82rem; }
   .login-form { display: grid; place-items: center; min-width: 0; padding: 24px 10px; }
+  .login-actions { display: grid; gap: 12px; width: min(420px, 100%); }
   .sign-in-card { display: grid; gap: 17px; width: min(420px, 100%); padding: 23px; border-radius: 14px; border: 1px solid var(--line); background: var(--panel); }
   .provider-actions, .email-sign-in { display: grid; gap: 9px; }
   .provider-actions > button { justify-content: space-between; }
@@ -143,8 +144,11 @@
   .preflight-controls { display: flex; gap: 8px; margin: 12px 0; flex-wrap: wrap; }
   .waiting { display: flex; align-items: center; gap: 9px; color: var(--accent); font-size: .88rem; margin: 9px 0; }
   .settings-card { padding-bottom: 18px; }
-  .settings-card > .button, .settings-card > p { margin: 12px 20px 0; }
-  .settings-fields { padding: 0 20px; }
+  .settings-card > .device-fields { padding: 0 20px; }
+  .device-fields { display: grid; gap: 8px; }
+  .device-fields > .button { justify-self: start; }
+  .preflight-devices { margin: 12px 0; }
+  .preflight-devices > summary { cursor: pointer; font-weight: 610; }
   .settings-row { min-height: 64px; display: grid; grid-template-columns: minmax(110px, 1fr) minmax(130px, 2fr) auto; align-items: center; gap: 11px; border-bottom: 1px solid var(--line); }
   .settings-row > div { display: flex; align-items: center; gap: 8px; }
 }
@@ -179,6 +183,7 @@
   .host-actions, .waiting-list { padding: 12px; border-bottom: 1px solid var(--line); }
   .waiting-list h3 { color: var(--accent); margin-bottom: 8px; }
   .waiting-person { display: flex; gap: 6px; flex-direction: column; font-size: .82rem; padding: 7px 0; }
+  .waiting-person small { display: block; color: var(--muted); font-weight: 400; }
   .waiting-person div { display: flex; gap: 5px; }
   .person { display: flex; align-items: center; min-width: 0; gap: 7px; padding: 9px; border-bottom: 1px solid var(--line); font-size: .84rem; }
   .person > div { display: grid; min-width: 0; flex: 1; }

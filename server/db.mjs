@@ -42,6 +42,7 @@ export function openDatabase(filename) {
       duration_minutes INTEGER NOT NULL DEFAULT 60,
       created_at INTEGER NOT NULL,
       lobby INTEGER NOT NULL,
+      allow_guests INTEGER NOT NULL DEFAULT 0,
       encrypted INTEGER NOT NULL DEFAULT 0,
       passcode TEXT,
       locked INTEGER NOT NULL DEFAULT 0,
@@ -101,6 +102,9 @@ export function openDatabase(filename) {
   if (!columns.has('duration_minutes')) db.exec('ALTER TABLE meetings ADD COLUMN duration_minutes INTEGER NOT NULL DEFAULT 60');
   if (!columns.has('encrypted')) {
     db.exec('ALTER TABLE meetings ADD COLUMN encrypted INTEGER NOT NULL DEFAULT 0');
+  }
+  if (!columns.has('allow_guests')) {
+    db.exec('ALTER TABLE meetings ADD COLUMN allow_guests INTEGER NOT NULL DEFAULT 0');
   }
   return db;
 }
