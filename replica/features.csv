@@ -27,3 +27,5 @@ F25,Meetings,Co-host participant management,should,yes,yes,Connection-bound dele
 F26,Meetings,Mute all attendees,should,yes,yes,Mutes attendee microphones in the main room
 F27,Meetings,Ask to unmute and stop attendee video,should,yes,yes,Moderators can stop camera tracks and send a targeted microphone request
 F28,Meetings,Virtual camera backgrounds and blur,should,yes,partial,On-device blur and local image backgrounds with previews in Settings and before joining
+F29,Meetings,Transfer host during a meeting,should,yes,yes,Transfer to a connected signed-in attendee in the main room of a standard meeting
+F30,Meetings,Share sound with a display,should,yes,yes,Opt-in system audio on Windows and browser-supported source audio

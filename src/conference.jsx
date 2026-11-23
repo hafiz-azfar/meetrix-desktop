@@ -6,7 +6,7 @@ import {
 import { ConnectionState, createLocalVideoTrack, RoomEvent, ScreenSharePresets, Track } from 'livekit-client';
 import { createEncryptedRoom } from './encrypted-room.js';
 import {
-  Captions, ChartNoAxesColumn, CircleDot, Clipboard, FileText, Grid2X2, Hand, Lock, LockOpen, MessageSquare, Mic, MicOff, MonitorUp, SmilePlus,
+  Captions, ChartNoAxesColumn, CircleDot, Clipboard, Crown, FileText, Grid2X2, Hand, Lock, LockOpen, MessageSquare, Mic, MicOff, MonitorUp, SmilePlus,
   Gauge, Maximize, PanelsTopLeft, PenTool, PhoneOff, Send, Settings2, ShieldCheck, ShieldMinus, ShieldPlus, SlidersHorizontal, UserMinus, Users, Video, VideoOff, X,
 } from 'lucide-react';
 import { invitation } from './api.js';
@@ -22,7 +22,7 @@ import { shortcutFor } from './shortcuts.js';
 import { BreakoutRooms } from './breakout-rooms.jsx';
 import { CaptionsOverlay, CaptionsPanel, useManualCaptions } from './meeting-captions.jsx';
 import { RecordingBanner, RecordingPanel, useMeetingRecording } from './meeting-recording.jsx';
-import { placementTopic, useRoomPlacement } from './room-placement.js';
+import { hostRolesTopic, placementTopic, useRoomPlacement } from './room-placement.js';
 
 const videoOptions = { adaptiveStream: true, dynacast: true, stopLocalTrackOnUnpublish: true };
 const messageTopic = 'meetrix.meeting';
@@ -47,10 +47,11 @@ export function Conference({ session, api, prefs, updatePrefs, onLeave }) {
     <button className="button" onClick={onLeave}>Return to workspace</button>
   </main>;
   return <ConferenceConnection key={placement.session.roomId} session={placement.session} api={api}
-    prefs={prefs} updatePrefs={updatePrefs} onLeave={onLeave} coHosts={placement.coHosts} refreshPlacement={placement.refreshPlacement} />;
+    prefs={prefs} updatePrefs={updatePrefs} onLeave={onLeave} roles={placement.roles}
+    updateRoles={placement.updateRoles} refreshPlacement={placement.refreshPlacement} />;
 }
 
-function ConferenceConnection({ session, api, prefs, updatePrefs, onLeave, coHosts, refreshPlacement }) {
+function ConferenceConnection({ session, api, prefs, updatePrefs, onLeave, roles, updateRoles, refreshPlacement }) {
   const [error, setError] = useState('');
   const [secureRoom, setSecureRoom] = useState(null);
   useEffect(() => {
@@ -69,7 +70,7 @@ function ConferenceConnection({ session, api, prefs, updatePrefs, onLeave, coHos
   return <LiveKitRoom room={secureRoom || undefined} serverUrl={session.serverUrl} token={session.token} audio={false} video={false}
     options={secureRoom ? undefined : videoOptions} onError={error => setError(error.message || 'Could not connect to the room.')}>
     <Call session={session} api={api} prefs={prefs} updatePrefs={updatePrefs} onLeave={onLeave}
-      connectionError={error} coHosts={coHosts} refreshPlacement={refreshPlacement} />
+      connectionError={error} roles={roles} updateRoles={updateRoles} refreshPlacement={refreshPlacement} />
     <RoomAudioRenderer volume={prefs.speakerVolume} />
   </LiveKitRoom>;
 }
@@ -102,13 +103,14 @@ function ElapsedTime({ joinedAt }) {
   return <time title="Time connected" className="call-timer">{hours ? hours + ':' : ''}{minutes}:{seconds}</time>;
 }
 
-function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, coHosts, refreshPlacement }) {
+function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, roles, updateRoles, refreshPlacement }) {
   const room = useRoomContext();
   const connection = useConnectionState();
   const { localParticipant, isCameraEnabled, isMicrophoneEnabled, isScreenShareEnabled } = useLocalParticipant();
   const participants = useParticipants();
   // Keep all tracks subscribed, including screen audio rendered by RoomAudioRenderer.
   const shares = useTracks([Track.Source.ScreenShare]);
+  const sharedAudio = useTracks([Track.Source.ScreenShareAudio]);
   const [layout, setLayout] = useState(prefs.layout);
   const [panel, setPanel] = useState(session.meeting.isHost ? 'people' : '');
   const [error, setError] = useState('');
@@ -116,6 +118,9 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, coHo
   const [confirmation, setConfirmation] = useState(false);
   const [microphoneRequest, setMicrophoneRequest] = useState(false);
   const [settings, setSettings] = useState(false);
+  const [shareOptions, setShareOptions] = useState(false);
+  const [shareSound, setShareSound] = useState(false);
+  const [sharing, setSharing] = useState(false);
   const [cameraBusy, setCameraBusy] = useState(false);
   const [viewOptions, setViewOptions] = useState(false);
   const [fullscreen, setFullscreen] = useState(Boolean(document.fullscreenElement));
@@ -123,7 +128,6 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, coHo
   const [pending, setPending] = useState(false);
   const [joinedAt, setJoinedAt] = useState(null);
   const [guests, setGuests] = useState([]);
-  const [hostRoleSnapshot, setHostRoleSnapshot] = useState(coHosts);
   const [locked, setLocked] = useState(session.meeting.locked);
   const [chat, setChat] = useState([]);
   const [hands, setHands] = useState({});
@@ -134,19 +138,20 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, coHo
   const changingCamera = useRef(false);
   const chartEnd = useRef(null);
   const id = session.meeting.id;
-  const host = session.meeting.isHost;
+  const { hostIdentity, hostVersion, coHosts } = roles;
+  const host = localParticipant.identity ? localParticipant.identity === hostIdentity : session.meeting.isHost;
   const online = connection === ConnectionState.Connected;
   const ended = joinedAt != null && connection === ConnectionState.Disconnected;
   const collaboration = !session.meeting.encrypted && !session.accountless && !session.breakoutName;
   const meetingTools = !session.meeting.encrypted && !session.breakoutName;
-  const delegates = new Map((host ? hostRoleSnapshot : coHosts).map(({ identity, sid }) => [identity, sid]));
+  const delegates = new Map(coHosts.map(({ identity, sid }) => [identity, sid]));
   const isCoHost = participant => !!participant.sid && delegates.get(participant.identity) === participant.sid;
-  const roleOf = participant => participant.identity === session.hostIdentity ? 'Host' : isCoHost(participant) ? 'Co-host' : '';
-  const coHost = online && meetingTools && !session.accountless && isCoHost(localParticipant);
+  const roleOf = participant => participant.identity === hostIdentity ? 'Host' : isCoHost(participant) ? 'Co-host' : '';
+  const coHost = online && !host && meetingTools && !session.accountless && isCoHost(localParticipant);
   const canModerate = host || coHost;
   const canManageBreakouts = meetingTools && canModerate;
-  const captions = useManualCaptions(room, { enabled: meetingTools, hostIdentity: session.hostIdentity });
-  const recording = useMeetingRecording(room, { enabled: meetingTools, hostIdentity: session.hostIdentity, host, meetingId: id });
+  const captions = useManualCaptions(room, { enabled: meetingTools, hostIdentity });
+  const recording = useMeetingRecording(room, { enabled: meetingTools, hostIdentity, host, meetingId: id });
 
   async function run(operation) {
     setError('');
@@ -207,23 +212,28 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, coHo
         if (!controller.signal.aborted) {
           setGuests(result.guests);
           setLocked(result.locked);
-          if (host && result.coHosts) setHostRoleSnapshot(result.coHosts);
+          updateRoles(result);
         }
       } catch (failure) { if (!controller.signal.aborted && failure.status === 401) setError(failure.message); }
       if (!controller.signal.aborted) timer = setTimeout(update, 4000);
     }
     update();
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [api, id, canModerate, ended, host]);
+  }, [api, id, canModerate, ended, updateRoles]);
 
   useEffect(() => {
-    if (!canManageBreakouts) setPanel(previous => previous === 'breakouts' ? 'people' : previous);
-  }, [canManageBreakouts]);
+    setPanel(previous => (!canManageBreakouts && previous === 'breakouts') || (!host && previous === 'recording') ? 'people' : previous);
+  }, [canManageBreakouts, host]);
 
   useEffect(() => {
     function receive(payload, participant, _kind, topic, _encryption, senderIdentity) {
       const serverPacket = !participant && !senderIdentity;
       if (serverPacket && topic === placementTopic) { refreshPlacement(); return; }
+      if (serverPacket && topic === hostRolesTopic && payload.byteLength <= 256) {
+        try { updateRoles(JSON.parse(decoder.decode(payload))); } catch { /* Ignore malformed role updates. */ }
+        refreshPlacement();
+        return;
+      }
       if (serverPacket && topic === microphoneRequestTopic && meetingTools && payload.byteLength === 1 && payload[0] === 1) {
         if (!room.localParticipant.isMicrophoneEnabled) setMicrophoneRequest(true);
         return;
@@ -260,7 +270,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, coHo
       room.off(RoomEvent.ParticipantDisconnected, remove);
       room.off(RoomEvent.Disconnected, refreshPlacement);
     };
-  }, [room, refreshPlacement, session.breakoutName, meetingTools]);
+  }, [room, refreshPlacement, session.breakoutName, meetingTools, updateRoles]);
   useEffect(() => { chartEnd.current?.scrollIntoView({ block: 'nearest' }); }, [chat, panel]);
   useEffect(() => {
     if (!reaction) return;
@@ -297,12 +307,21 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, coHo
   async function moderate(command) {
     return run(async () => {
       const result = await api('/meetings/' + id + '/moderate', { method: 'POST', body: command });
-      if (host && result.coHosts) setHostRoleSnapshot(result.coHosts);
+      updateRoles(result);
       if (command.action === 'decide') setGuests(previous => previous.filter(guest => guest.identity !== command.identity));
       if (command.action === 'lock') setLocked(command.locked);
       if (command.action === 'mute-all') setToast('Attendee microphones muted.');
       if (command.action === 'ask-unmute') setToast('Microphone request sent.');
     });
+  }
+
+  async function transferHost(participant) {
+    const name = participant.name || 'this participant';
+    if (!window.confirm('Make ' + name + ' the host? You will become an attendee.')) return;
+    await recording.finishForExit();
+    if (await moderate({ action: 'transfer-host', identity: participant.identity, sid: participant.sid })) {
+      setToast(name + ' is now the host.');
+    }
   }
 
   async function exit(end) {
@@ -388,15 +407,32 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, coHo
     });
   }
 
-  function toggleShare() {
+  async function startShare() {
+    if (!online || sharing || isScreenShareEnabled) return;
+    setShareOptions(false);
+    setSharing(true);
     const preset = ScreenSharePresets.h1080fps15;
     const resolution = prefs.shareFps ? { ...preset.resolution, frameRate: prefs.shareFps } : undefined;
     const publishOptions = prefs.shareFps
       ? { screenShareEncoding: { ...preset.encoding, maxFramerate: prefs.shareFps } }
       : undefined;
-    return run(() => localParticipant.setScreenShareEnabled(!isScreenShareEnabled, {
-      audio: false, resolution, contentHint: prefs.shareHint || undefined,
-    }, publishOptions));
+    try {
+      await run(async () => {
+        await localParticipant.setScreenShareEnabled(true, {
+          audio: shareSound ? { restrictOwnAudio: true, echoCancellation: false, noiseSuppression: false, autoGainControl: false } : false,
+          systemAudio: shareSound ? 'include' : 'exclude', selfBrowserSurface: 'exclude',
+          resolution, contentHint: prefs.shareHint || undefined,
+        }, publishOptions);
+        const audioTrack = localParticipant.getTrackPublication(Track.Source.ScreenShareAudio)?.track?.mediaStreamTrack;
+        if (shareSound && audioTrack?.readyState !== 'live') setToast('Video is sharing. This source supplied no sound.');
+      });
+    } finally { setSharing(false); }
+  }
+
+  function toggleShare() {
+    if (isScreenShareEnabled) return run(() => localParticipant.setScreenShareEnabled(false));
+    setShareSound(false);
+    setShareOptions(true);
   }
 
   function toggleFullscreen() {
@@ -432,6 +468,8 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, coHo
     ? visibleParticipants.toSorted((a, b) => Number(b.isSpeaking) - Number(a.isSpeaking)).slice(0, 1)
     : visibleParticipants;
   const activeShare = shares.find(({ publication }) => publication.track && !publication.isMuted);
+  const anyShareAudio = activeShare && sharedAudio.some(({ participant, publication }) =>
+    participant.identity === activeShare.participant.identity && publication.track && !publication.isMuted);
   const stageClass = 'stage' + (activeShare ? ' with-share share-' + prefs.shareLayout : '');
   const hand = !!hands[localParticipant.identity];
 
@@ -439,7 +477,8 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, coHo
     <header className="call-header"><Logo /><div className="call-title"><strong>{session.meeting.title}</strong><span><i className="status-dot" />{ended ? 'Disconnected' : online ? 'Connected' : connection === ConnectionState.Reconnecting ? 'Reconnecting' : 'Connecting'}
       {online && prefs.meetingTimer && joinedAt && <ElapsedTime joinedAt={joinedAt} />}
     </span>{session.breakoutName && <span className="breakout-indicator">Breakout · {session.breakoutName}</span>}
-      {coHost && <span className="breakout-indicator" role="status">You’re a co-host</span>}</div>
+      {coHost && <span className="breakout-indicator" role="status">You’re a co-host</span>}
+      {online && host && hostVersion > 0 && <span className="breakout-indicator" role="status">You’re the host</span>}</div>
       <div className="call-header-actions">
         {session.meeting.encrypted && <span className="button subtle"><ShieldCheck size={16} /> Encrypted media</span>}
         <button className="button" disabled={!online} onClick={() => setSettings(true)}><Settings2 size={16} /> Devices</button>
@@ -465,7 +504,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, coHo
       {reaction && <div className="reaction-toast" role="status"><span>{reaction.emoji}</span> {reaction.from}</div>}
       <div className="stage-wrap"><section className={stageClass} aria-label="Meeting stage">
         {!online && !participants.length ? <div className="empty"><Video size={28} /><strong>{ended ? 'Meeting connection closed' : 'Connecting to the room'}</strong></div> : null}
-        {activeShare && <div className="share"><VideoTrack trackRef={activeShare} /><span>{activeShare.participant.name || 'Guest'} is sharing</span></div>}
+        {activeShare && <div className="share"><VideoTrack trackRef={activeShare} /><span>{activeShare.participant.name || 'Guest'} is sharing{anyShareAudio && ' with sound'}</span></div>}
         {online && !display.length && !activeShare && <div className="empty"><VideoOff size={28} /><strong>There are no visible participant tiles.</strong></div>}
         <div className="tile-grid" style={{ '--tiles': Math.min(3, Math.max(1, display.length)) }}>
           {display.map(participant => <Tile key={participant.identity} participant={participant}
@@ -493,6 +532,9 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, coHo
               }}>
               {isCoHost(participant) ? <ShieldMinus size={17} /> : <ShieldPlus size={17} />}
             </button>}
+            {host && meetingTools && !participant.isLocal && !participant.identity.startsWith('guest_') && <button className="icon-button"
+              disabled={!online || !participant.sid} title="Transfer host" aria-label={'Transfer host to ' + participant.name}
+              onClick={() => transferHost(participant)}><Crown size={17} /></button>}
             {canModerate && !participant.isLocal && (host || !roleOf(participant)) && <>
               {participant.isMicrophoneEnabled || !meetingTools
                 ? <button className="icon-button" title="Mute participant" aria-label={'Mute ' + participant.name} onClick={() => moderate({ action: 'mute', identity: participant.identity })}><MicOff size={17} /></button>
@@ -515,7 +557,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, coHo
         {panel === 'board' && <Whiteboard api={api} id={id} host={host} />}
         {panel === 'quality' && <CallStatistics room={room} online={online} />}
         {panel === 'captions' && <CaptionsPanel captions={captions} host={host} online={online} meetingId={id} />}
-        {panel === 'recording' && <RecordingPanel recording={recording} participants={participants} online={online} />}
+        {panel === 'recording' && host && <RecordingPanel recording={recording} participants={participants} online={online} />}
         {panel === 'breakouts' && canManageBreakouts && <BreakoutRooms api={api} meetingId={id} participants={participants.filter(participant => !roleOf(participant))}
           removeParticipant={identity => moderate({ action: 'remove', identity })} />}
       </aside>}
@@ -524,7 +566,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, coHo
       <StartAudio label="Enable audio" className="button" />
       <button className="call-control" disabled={!online} aria-pressed={isMicrophoneEnabled} onClick={toggleMicrophone}>{isMicrophoneEnabled ? <Mic size={20} /> : <MicOff size={20} />}<span>{isMicrophoneEnabled ? 'Mute' : 'Unmute'}</span></button>
       <button className="call-control" disabled={!online || cameraBusy} aria-pressed={isCameraEnabled} onClick={toggleCamera}>{isCameraEnabled ? <Video size={20} /> : <VideoOff size={20} />}<span>Camera</span></button>
-      <button className="call-control" disabled={!online} aria-pressed={isScreenShareEnabled} onClick={toggleShare}><MonitorUp size={20} /><span>{isScreenShareEnabled ? 'Stop share' : 'Share'}</span></button>
+      <button className="call-control" disabled={!online || sharing} aria-pressed={isScreenShareEnabled} onClick={toggleShare}><MonitorUp size={20} /><span>{isScreenShareEnabled ? 'Stop share' : 'Share'}</span></button>
       <button className="call-control" aria-pressed={panel === 'people'} onClick={() => togglePanel('people')}><Users size={20} /><span>People {participants.length + (canModerate ? guests.length : 0)}</span></button>
       <button className="call-control" aria-pressed={panel === 'chat'} onClick={() => togglePanel('chat')}><MessageSquare size={20} /><span>Chat</span></button>
       {meetingTools && <button className="call-control" aria-pressed={panel === 'captions'} onClick={() => togglePanel('captions')}><Captions size={20} /><span>Captions</span></button>}
@@ -547,6 +589,14 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, coHo
       <SpeakerVolume prefs={prefs} updatePrefs={updatePrefs} />
       <CameraBackgroundFields prefs={prefs} onChange={changeBackground} />
       <div className="dialog-actions"><button className="button primary" onClick={() => setSettings(false)}>Done</button></div>
+    </Dialog>}
+    {shareOptions && <Dialog title="Share your screen" close={() => setShareOptions(false)}>
+      <label className="check"><input type="checkbox" checked={shareSound} onChange={event => setShareSound(event.target.checked)} />
+        <span><strong>Include sound</strong><small>{window.meetrixDesktop
+          ? 'Choose a display to share its picture and system audio, including sounds from other apps.'
+          : 'Your browser decides which screens or tabs can share audio.'}</small></span></label>
+      <div className="dialog-actions"><button className="button" onClick={() => setShareOptions(false)}>Cancel</button>
+        <button className="button primary" disabled={!online} onClick={startShare}>Choose source</button></div>
     </Dialog>}
     {viewOptions && <Dialog title="View preferences" close={() => setViewOptions(false)}>
       <CallViewOptions prefs={prefs} updatePrefs={updatePrefs} />

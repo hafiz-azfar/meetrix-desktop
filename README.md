@@ -40,6 +40,8 @@ Meetrix keys account ownership by the InsForge project and user ID. Earlier Cler
 - Use **Camera background** in Video settings, the pre-join setup, or a meeting’s **Devices** dialog. Choose blur or a JPEG, PNG, or WebP image from your device. The app saves your selection on this device. The bundled model applies the effect locally before Meetrix publishes your camera.
 - Appearance, in-app shortcut assignments, chat accessibility, and presentation preferences are saved on your device. From a call, **View preferences** can pause incoming cameras while preserving audio and presentations. **Call statistics** displays sampled WebRTC media measurements.
 - Host moderation, passcodes, room locks, waiting rooms, and participant removal.
+- In standard meetings, open **People** and select **Transfer host** on a connected, signed-in attendee. The meeting continues under the new host, and the original organizer can stay or leave.
+- Turn on **Include sound** in the **Share** dialog to send sound with a display. The Windows app captures system audio with an explicitly selected display. A browser’s source picker determines which other sources provide audio.
 - In a standard meeting, hosts can open **People** and make a connected, signed-in attendee a co-host. Co-hosts can manage the waiting room, lock the room, moderate attendees, and manage breakouts. Hosts can revoke co-host access from the same panel. **Mute attendees** mutes active attendee microphones in the main room. Moderators can stop an attendee’s camera or ask an attendee to turn on their microphone. The attendee chooses whether to unmute.
 - Hosts can allow invitees without accounts. The waiting room still applies, and the host sees those invitees labeled as unverified guests.
 - In standard meetings, hosts and co-hosts can use **Breakouts** to name up to eight rooms, assign connected attendees manually or evenly, and send text announcements. **Close all rooms** returns attendees to the main meeting. Hosts and co-hosts stay in the main room. Automatic moves start with the microphone and camera off.
@@ -52,6 +54,8 @@ Meetrix keys account ownership by the InsForge project and user ID. Earlier Cler
 ## Verification
 
 Run `npm test`, `npm run build`, and `npm audit`. The API tests exercise OAuth state, PKCE, workspace cookies, desktop pairing, and guest access. The Windows smoke test can check a packaged trial with `node test/smoke-browser-sign-in.mjs`. With an InsForge project configured, it checks configured Google and GitHub redirects. Optional `MEETRIX_QA_EMAIL` and `MEETRIX_QA_PASSWORD` enable the complete test using an existing test account. After staging the runtime, use `node test/smoke-rtc.mjs` for two-client LiveKit verification and `node test/smoke-guest-meeting.mjs` for the guest join and device-switching workflows.
+
+Run `node test/smoke-windows-share.mjs` with the unpacked Windows build to check the display picker and audio track creation. This test samples track state locally and closes the capture immediately.
 
 ## License
 

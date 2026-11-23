@@ -10,6 +10,7 @@ const roundId = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 
 export function useMeetingRecording(room, { enabled, hostIdentity, host, meetingId }) {
   const round = useRef(null);
+  const previousHost = useRef(hostIdentity);
   const clip = useRef(null);
   const finalizing = useRef(null);
   const stoppedWhileOffline = useRef(null);
@@ -187,6 +188,21 @@ export function useMeetingRecording(room, { enabled, hostIdentity, host, meeting
     if (!round.current && !finalizing.current && !clip.current) return;
     if (host) void finishForExit();
   });
+
+  const resetForHostTransfer = useEffectEvent(() => {
+    if (round.current?.answers || finalizing.current || clip.current) {
+      void stop('Recording stopped because the host changed.').then(save);
+    } else {
+      sync(null);
+      setNotice('');
+    }
+  });
+
+  useEffect(() => {
+    if (previousHost.current === hostIdentity) return;
+    previousHost.current = hostIdentity;
+    resetForHostTransfer();
+  }, [hostIdentity]);
 
   useEffect(() => {
     if (!enabled) return;

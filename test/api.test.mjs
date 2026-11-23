@@ -189,7 +189,7 @@ test('breakout grants are limited to an admitted guest and one active room', asy
   const meeting = (await create({ lobby: false })).json;
   const other = (await create({ lobby: false })).json;
   const host = (await connect(meeting.id, 'owner')).json;
-  assert.equal(host.routingKey, undefined);
+  assert.match(host.routingKey, /^[A-Za-z0-9_-]{43}$/);
   const guest = (await connect(meeting.id, 'guest')).json;
   const stranger = (await connect(meeting.id, 'stranger')).json;
   const path = '/meetings/' + meeting.id + '/breakouts';
@@ -203,7 +203,8 @@ test('breakout grants are limited to an admitted guest and one active room', asy
   assert.equal((await api(path, { token: 'guest', method: 'POST', body: { action: 'announce', text: 'Guest message' } })).status, 403);
   assert.equal((await open([...plan, { name: 'Observer', members: ['guest'] }])).status, 400);
   assert.equal((await open([{ name: 'Hosts', members: ['owner'] }])).status, 404);
-  assert.deepEqual((await place(guest.routingKey, meeting.id)).json, { roomId: meeting.id, coHosts: [] });
+  assert.deepEqual((await place(guest.routingKey, meeting.id)).json,
+    { roomId: meeting.id, hostIdentity: 'owner', hostVersion: 0, coHosts: [] });
   const retry = (await connect(meeting.id, 'guest')).json;
   assert.notEqual(retry.routingKey, guest.routingKey);
   assert.equal((await place(guest.routingKey, meeting.id)).status, 200);
@@ -327,6 +328,45 @@ test('co-hosts can moderate only while their assigned LiveKit session is connect
   assert.equal((await grant('guest', 'PA_reconnected', false)).status, 200);
   assert.equal((await lobby('guest')).status, 403);
   assert.equal((await moderate(id, { action: 'lock', locked: true }, 'guest')).status, 403);
+});
+
+test('a live host transfer preserves the organizer and replaces in-room authority', async t => {
+  const { api, create, connect, moderate, calls, livePeople } = await fixture(t);
+  const { id } = (await create({ lobby: false })).json;
+  const path = '/meetings/' + id;
+  const owner = (await connect(id, 'owner')).json;
+  const guest = (await connect(id, 'guest')).json;
+  const place = key => api(path + '/placement', { token: '', method: 'POST', body: { key, roomId: id } });
+  const transfer = (identity, sid, token = 'owner') => moderate(id, { action: 'transfer-host', identity, sid }, token);
+  assert.equal((await transfer('guest', 'PA_guest')).status, 409);
+  livePeople.set('guest', { sid: 'PA_guest', state: ParticipantInfo_State.ACTIVE });
+  livePeople.set('owner', { sid: 'PA_owner', state: ParticipantInfo_State.ACTIVE });
+  assert.equal((await transfer('guest', 'PA_previous')).status, 409);
+  assert.equal((await transfer('guest', 'PA_guest', 'guest')).status, 403);
+  await moderate(id, { action: 'co-host', identity: 'guest', sid: 'PA_guest', enabled: true });
+  assert.deepEqual((await transfer('guest', 'PA_guest')).json, {
+    ok: true, hostIdentity: 'guest', hostVersion: 1, coHosts: [],
+  });
+  assert.ok(calls.some(([kind, room, options]) => kind === 'data' && room === id && options.topic === 'meetrix.host-roles'));
+  assert.equal((await place(owner.routingKey)).json.hostIdentity, 'guest');
+  assert.equal((await place(guest.routingKey)).json.hostVersion, 1);
+  assert.equal((await api(path + '/lobby', { token: 'owner' })).status, 403);
+  assert.equal((await moderate(id, { action: 'end' })).status, 403);
+  assert.equal((await moderate(id, { action: 'remove', identity: 'guest' }, 'guest')).status, 403);
+  assert.equal((await api(path + '/lobby', { token: 'guest' })).status, 200);
+  assert.equal((await moderate(id, { action: 'lock', locked: true }, 'guest')).status, 200);
+  assert.equal((await connect(id, 'owner')).status, 423);
+  const currentHost = (await connect(id, 'guest')).json;
+  assert.equal(currentHost.meeting.isHost, true);
+  assert.equal(currentHost.meeting.ownerName, 'Owner');
+  assert.equal((await api(path + '/breakouts', { method: 'POST', token: 'guest',
+    body: { action: 'open', rooms: [{ name: 'Review', members: ['guest'] }] } })).status, 409);
+  assert.equal((await moderate(id, { action: 'lock', locked: false }, 'guest')).status, 200);
+  const formerHost = (await connect(id, 'owner')).json;
+  assert.equal(formerHost.meeting.isHost, false);
+  assert.equal((await transfer('owner', 'PA_owner', 'guest')).json.hostVersion, 2);
+  assert.equal((await place(owner.routingKey)).json.hostIdentity, 'owner');
+  assert.equal((await moderate(id, { action: 'end' })).status, 200);
 });
 
 test('shared notes require access and reject stale writes; encrypted rooms skip stored notes', async t => {

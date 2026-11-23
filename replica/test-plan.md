@@ -40,6 +40,8 @@
 | F27-H1 | A moderator stops an attendee camera and sends a private microphone prompt. Only the attendee can accept the prompt and turn on their microphone | API and four-client guest-meeting smoke tests |
 | F28-H1 | A saved image survives reload, renders in preview, and is visible to another participant. Changing to blur updates the published camera | Browser smoke test with loopback LiveKit and synthetic camera |
 | F28-N1 | Blocking the bundled model keeps the camera off. The host can switch the effect off and start the regular camera | Browser smoke test with an intercepted model request |
+| F29-H1 | The host hands off control to another attendee, who can caption and end the meeting after the former host leaves | API and four-client LiveKit smoke tests |
+| F30-H1 | The Windows picker supports cancelling or opting into display audio. Remote attendees receive audio, and stopping a share releases both tracks | Windows smoke and four-client LiveKit smoke tests |
 | F12-P1 | 100-person load, 30-hour duration, and production availability | Deployment-scale verification |
 
 Run `npm test` for the API suite. The RTC tests use two isolated browser pages and a real loopback LiveKit server. The desktop test is aimed at the Windows development build.

@@ -37,6 +37,8 @@ export function openDatabase(filename) {
       id TEXT PRIMARY KEY,
       owner TEXT NOT NULL,
       owner_name TEXT NOT NULL,
+      host_identity TEXT,
+      host_version INTEGER NOT NULL DEFAULT 0,
       title TEXT NOT NULL,
       start_at INTEGER NOT NULL,
       duration_minutes INTEGER NOT NULL DEFAULT 60,
@@ -127,6 +129,8 @@ export function openDatabase(filename) {
     db.exec("ALTER TABLE desktop_sessions ADD COLUMN kind TEXT NOT NULL DEFAULT 'desktop'");
   }
   const columns = new Set(db.prepare('PRAGMA table_info(meetings)').all().map(column => column.name));
+  if (!columns.has('host_identity')) db.exec('ALTER TABLE meetings ADD COLUMN host_identity TEXT');
+  if (!columns.has('host_version')) db.exec('ALTER TABLE meetings ADD COLUMN host_version INTEGER NOT NULL DEFAULT 0');
   if (!columns.has('duration_minutes')) db.exec('ALTER TABLE meetings ADD COLUMN duration_minutes INTEGER NOT NULL DEFAULT 60');
   if (!columns.has('encrypted')) {
     db.exec('ALTER TABLE meetings ADD COLUMN encrypted INTEGER NOT NULL DEFAULT 0');

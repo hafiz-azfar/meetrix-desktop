@@ -47,6 +47,17 @@ try {
       window.testShareOptions = options;
       const stream = await navigator.mediaDevices.getUserMedia({ video: options.video });
       window.testShareTrack = stream.getVideoTracks()[0];
+      if (options.audio) {
+        const audio = new AudioContext();
+        const signal = audio.createOscillator();
+        const output = audio.createMediaStreamDestination();
+        signal.connect(output);
+        signal.start();
+        await audio.resume();
+        window.testShareAudio = output.stream.getAudioTracks()[0];
+        stream.addTrack(window.testShareAudio);
+        window.testAudioContext = audio;
+      }
       return stream;
     };
   });
@@ -214,10 +225,16 @@ try {
   await guest.getByRole('button', { name: 'Call statistics' }).click();
   await guest.locator('.stat-sample').filter({ hasText: 'Camera' }).getByText(/\d+ kb\/s/).waitFor();
   await host.getByRole('button', { name: 'Share', exact: true }).click();
+  assert.equal(await host.getByLabel('Include sound').isChecked(), false);
+  await host.getByLabel('Include sound').check();
+  await host.getByRole('button', { name: 'Choose source', exact: true }).click();
   await host.locator('.stage.share-side .share video').waitFor();
   await guest.locator('.share video').waitFor();
   assert.equal(await host.evaluate(() => window.testShareOptions.video.frameRate), 5);
   assert.equal(await host.evaluate(() => window.testShareTrack.contentHint), 'text');
+  assert.equal(await host.evaluate(() => window.testShareOptions.audio.restrictOwnAudio), true);
+  await guest.getByText('Alex Morgan is sharing with sound', { exact: true }).waitFor();
+  await guest.locator('.stat-sample').filter({ hasText: 'Shared audio' }).getByText(/[1-9]\d* kb\/s/).waitFor();
 
   await guest.getByRole('button', { name: 'View preferences' }).click();
   await guest.getByLabel('Pause incoming cameras').check();
@@ -233,6 +250,9 @@ try {
   await guest.locator('.stage .tile video').waitFor();
   await guest.screenshot({ path: resolve(results, 'meetrix-call-statistics.png') });
   await host.getByRole('button', { name: 'Stop share', exact: true }).click();
+  await guest.locator('.stat-sample').filter({ hasText: 'Shared audio' }).waitFor({ state: 'detached' });
+  await host.waitForFunction(() => window.testShareTrack.readyState === 'ended' && window.testShareAudio.readyState === 'ended');
+  await host.evaluate(() => window.testAudioContext.close());
   await guest.getByRole('button', { name: 'Close panel' }).click();
 
   await host.getByRole('button', { name: 'Devices', exact: true }).click();
@@ -401,10 +421,24 @@ try {
     headers: { Origin: origin }, data: { action: 'lock', locked: true },
   })).status(), 403);
 
+  host.once('dialog', dialog => dialog.accept());
+  await host.getByRole('button', { name: 'Transfer host to Design partner', exact: true }).click();
+  await delegate.getByText('You’re the host', { exact: true }).waitFor();
+  await host.getByRole('button', { name: 'Record', exact: true }).waitFor({ state: 'detached' });
+  assert.equal((await host.request.post(origin + '/api/meetings/' + id + '/moderate', {
+    headers: { Origin: origin }, data: { action: 'end' },
+  })).status(), 403);
+  await delegate.getByRole('button', { name: 'Captions', exact: true }).click();
+  await delegate.getByRole('textbox', { name: 'Caption text' }).fill('The meeting continues with a new host.');
+  await delegate.getByRole('button', { name: 'Send caption' }).click();
+  await guest.locator('.caption-overlay').getByText('The meeting continues with a new host.').waitFor();
   await host.getByRole('button', { name: 'Leave', exact: true }).click();
-  await host.getByRole('button', { name: 'End for everyone' }).click();
+  await host.getByRole('button', { name: 'New meeting', exact: true }).waitFor();
+  await delegate.getByText('You’re the host', { exact: true }).waitFor();
+  await delegate.getByRole('button', { name: 'Leave', exact: true }).click();
+  await delegate.getByRole('button', { name: 'End for everyone' }).click();
   await guest.getByText('You are disconnected from this room.').waitFor();
-  console.log('Meeting settings, private camera backgrounds, four-client breakouts, caption export, consent-gated recording, and live co-host checks passed.');
+  console.log('Four-client meeting checks passed, including screen-share audio, host transfer, backgrounds, breakouts, captions, recording, and co-hosts.');
 } finally {
   await browser?.close();
   backend?.stop();

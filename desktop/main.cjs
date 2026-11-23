@@ -59,22 +59,36 @@ function configureSession(browserSession, origin) {
     const allowed = fromWorkspace && (media || permission === 'display-capture' || permission === 'clipboard-sanitized-write');
     callback(Boolean(allowed));
   });
+  let choosingSource = false;
   browserSession.setDisplayMediaRequestHandler(async (request, callback) => {
-    if (!request.userGesture || !sameOrigin(request.securityOrigin, origin)
-      || !request.frame || request.frame.parent || !sameOrigin(request.frame.url, origin)) return callback({});
+    const target = window;
+    const frame = request.frame;
+    function isWorkspaceFrame() {
+      return target && target === window && !target.isDestroyed() && frame && !frame.detached &&
+        target.webContents.mainFrame === frame && sameOrigin(frame.url, origin);
+    }
+    if (!request.videoRequested || !request.userGesture || !sameOrigin(request.securityOrigin, origin)
+      || choosingSource || !isWorkspaceFrame()) return callback({});
+    const withSound = request.audioRequested && process.platform === 'win32';
+    choosingSource = true;
     try {
-      const sources = await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 0, height: 0 } });
+      const types = withSound ? ['screen'] : ['screen', 'window'];
+      const sources = await desktopCapturer.getSources({ types, thumbnailSize: { width: 0, height: 0 } });
       const choices = sources.slice(0, 12);
-      if (!choices.length || !window || window.isDestroyed()) return callback({});
+      if (!choices.length || !isWorkspaceFrame()) return callback({});
       const cancel = choices.length;
-      const result = await dialog.showMessageBox(window, {
-        title: 'Share your screen', message: 'Choose a display or window to share',
-        detail: 'Everyone in the meeting can see the source you choose.',
+      const result = await dialog.showMessageBox(target, {
+        title: 'Share your screen', message: withSound ? 'Choose a display to share with sound' : 'Choose a display or window to share',
+        detail: withSound
+          ? 'Everyone in the meeting can see this display and hear system audio, which can include sounds from other apps.'
+          : 'Everyone in the meeting can see the source you choose.',
         buttons: [...choices.map(choice => choice.name), 'Cancel'],
         defaultId: cancel, cancelId: cancel, noLink: true,
       });
-      callback(result.response === cancel ? {} : { video: choices[result.response] });
+      const selected = choices[result.response];
+      callback(selected && isWorkspaceFrame() ? { video: selected, ...(withSound ? { audio: 'loopback' } : {}) } : {});
     } catch { callback({}); }
+    finally { choosingSource = false; }
   });
 }
 
