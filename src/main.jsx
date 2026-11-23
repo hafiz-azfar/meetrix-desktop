@@ -5,6 +5,7 @@ import { ApproveDesktop, DesktopBrowserSignIn, DesktopSignOut, desktopRequest } 
 import { SignInForm } from './insforge-sign-in.jsx';
 import { GuestMeeting, Workspace } from './workspace.jsx';
 import { Logo } from './ui.jsx';
+import { useDevicePreferences } from './media-devices.jsx';
 import './style.css';
 
 const isDesktop = Boolean(window.meetrixDesktop);
@@ -50,6 +51,11 @@ function App() {
   const [status, setStatus] = useState({});
   const [user, setUser] = useState(null);
   const [guest, setGuest] = useState(false);
+  const [prefs, updatePrefs] = useDevicePreferences();
+  useEffect(() => {
+    document.documentElement.dataset.theme = prefs.theme;
+    document.documentElement.dataset.reducedMotion = String(prefs.reducedMotion);
+  }, [prefs.theme, prefs.reducedMotion]);
   useEffect(() => {
     const control = new AbortController();
     Promise.all([
@@ -66,10 +72,11 @@ function App() {
     return <div className="boot"><Logo /><p role={status.error ? 'alert' : 'status'}>{status.error || 'Opening your workspace…'}</p>
       {status.error && <button className="button" onClick={() => location.reload()}>Try again</button>}</div>;
   }
-  if (!user && guest) return <GuestMeeting code={joinCode || ''} onBack={() => setGuest(false)} />;
+  if (!user && guest) return <GuestMeeting code={joinCode || ''} onBack={() => setGuest(false)} prefs={prefs} updatePrefs={updatePrefs} />;
   if (!user) return <Login onSignedIn={isDesktop ? setUser : () => location.replace(continueTo)} onGuest={() => setGuest(true)} />;
   if (approvalPage) return <ApproveDesktop requestId={requestId} user={user} onSignedOut={setUser} />;
-  return <Workspace config={status.config} user={user} accountControl={<DesktopSignOut onSignedOut={setUser} />} />;
+  return <Workspace config={status.config} user={user} accountControl={<DesktopSignOut onSignedOut={setUser} />}
+    prefs={prefs} updatePrefs={updatePrefs} />;
 }
 
 createRoot(document.getElementById('root')).render(<App />);

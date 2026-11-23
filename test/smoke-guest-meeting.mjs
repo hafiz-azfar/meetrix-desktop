@@ -27,6 +27,14 @@ try {
   });
   const host = await browser.newPage({ permissions: ['camera', 'microphone'], viewport: { width: 1280, height: 800 } });
   const guest = await browser.newPage({ permissions: ['camera', 'microphone'] });
+  await host.addInitScript(() => {
+    navigator.mediaDevices.getDisplayMedia = async options => {
+      window.testShareOptions = options;
+      const stream = await navigator.mediaDevices.getUserMedia({ video: options.video });
+      window.testShareTrack = stream.getVideoTracks()[0];
+      return stream;
+    };
+  });
   const hostSignIn = await host.request.post(origin + '/api/auth/email/password', {
     headers: { Origin: origin }, data: { email: 'host@example.test', password: 'test-password' },
   });
@@ -69,6 +77,31 @@ try {
   await track.dispose();
   await host.getByLabel('Starting layout').selectOption('speaker');
   await host.waitForFunction(() => JSON.parse(localStorage.getItem('meetrix-devices')).layout === 'speaker');
+  await host.getByLabel('Show elapsed time').check();
+  await host.waitForFunction(() => JSON.parse(localStorage.getItem('meetrix-devices')).meetingTimer === true);
+  await host.getByRole('button', { name: 'Appearance' }).click();
+  await host.getByLabel('App theme').selectOption('dark');
+  await host.waitForFunction(() => getComputedStyle(document.documentElement).colorScheme === 'dark');
+  await host.screenshot({ path: resolve(results, 'meetrix-settings-dark.png') });
+  await host.reload();
+  await host.getByRole('button', { name: 'Settings', exact: true }).click();
+  assert.equal(await host.evaluate(() => getComputedStyle(document.documentElement).colorScheme), 'dark');
+  assert.equal(await host.evaluate(() => JSON.parse(localStorage.getItem('meetrix-devices')).meetingTimer), true);
+  await host.getByRole('button', { name: 'Appearance' }).click();
+  await host.getByLabel('App theme').selectOption('light');
+  await host.getByRole('button', { name: 'Accessibility', exact: true }).click();
+  await host.getByLabel('Meeting chat text size').selectOption('largest');
+  await host.getByLabel('Announce new messages in the open chat panel').uncheck();
+  await host.getByLabel('Reduce motion').check();
+  await host.waitForFunction(() => document.documentElement.dataset.reducedMotion === 'true');
+  await host.getByRole('button', { name: 'Keyboard shortcuts' }).click();
+  const cameraShortcut = host.getByLabel('Toggle camera', { exact: true });
+  assert.equal(await cameraShortcut.locator('option[value="M"]').isDisabled(), true);
+  await cameraShortcut.selectOption('K');
+  await host.getByRole('button', { name: 'Screen sharing', exact: true }).click();
+  await host.getByLabel('Capture frame rate').selectOption('5');
+  await host.getByLabel('Content priority').selectOption('text');
+  await host.getByLabel('Shared screen layout').selectOption('side');
   await host.setViewportSize({ width: 390, height: 844 });
   await host.getByRole('button', { name: 'Audio', exact: true }).click();
   assert.ok(await host.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
@@ -85,6 +118,14 @@ try {
   await host.getByRole('button', { name: 'Enter room' }).click();
   await host.getByRole('button', { name: 'Devices', exact: true }).waitFor();
   await host.getByRole('button', { name: 'Gallery', exact: true }).waitFor();
+  try { await host.locator('time.call-timer').waitFor({ timeout: 15000 }); }
+  catch {
+    assert.fail(await host.evaluate(() => JSON.stringify({
+      status: document.querySelector('.call-title')?.innerText,
+      notice: document.querySelector('.call-notice')?.innerText,
+      meetingTimer: JSON.parse(localStorage.getItem('meetrix-devices')).meetingTimer,
+    })));
+  }
   assert.equal(await host.evaluate(() => JSON.parse(localStorage.getItem('meetrix-devices')).camera), false);
   const meetings = await (await host.request.get(origin + '/api/meetings')).json();
   const id = meetings.find(meeting => meeting.title === 'Guest smoke test').id;
@@ -101,6 +142,47 @@ try {
   await guest.getByRole('button', { name: 'Devices', exact: true }).waitFor();
   await guest.waitForFunction(() => Array.from(document.querySelectorAll('.stage video')).some(video => video.readyState >= 2));
   assert.equal((await guest.request.get(origin + '/api/meetings/' + id + '/notes')).status(), 401);
+  await host.getByRole('button', { name: 'Fullscreen', exact: true }).click();
+  await host.waitForFunction(() => document.fullscreenElement === document.documentElement);
+  await host.getByRole('button', { name: 'Exit fullscreen', exact: true }).click();
+  await host.waitForFunction(() => document.fullscreenElement === null);
+
+  const cameraToggle = host.getByRole('button', { name: 'Camera', exact: true });
+  await host.getByRole('button', { name: 'Chat', exact: true }).click();
+  await host.getByRole('textbox', { name: 'Message', exact: true }).focus();
+  assert.equal(await host.locator('.chat-log').getAttribute('aria-live'), 'off');
+  assert.equal(await host.locator('.chat-log').getAttribute('data-text-size'), 'largest');
+  await host.keyboard.press('Alt+Shift+K');
+  assert.equal(await cameraToggle.getAttribute('aria-pressed'), 'true');
+  await host.getByRole('button', { name: 'Close panel' }).click();
+  await host.keyboard.press('Alt+Shift+K');
+  await host.locator('button[aria-pressed="false"]').filter({ hasText: /^Camera$/ }).waitFor();
+  await host.keyboard.press('Alt+Shift+K');
+  await host.locator('button[aria-pressed="true"]').filter({ hasText: /^Camera$/ }).waitFor();
+
+  await guest.getByRole('button', { name: 'Call statistics' }).click();
+  await guest.locator('.stat-sample').filter({ hasText: 'Camera' }).getByText(/\d+ kb\/s/).waitFor();
+  await host.getByRole('button', { name: 'Share', exact: true }).click();
+  await host.locator('.stage.share-side .share video').waitFor();
+  await guest.locator('.share video').waitFor();
+  assert.equal(await host.evaluate(() => window.testShareOptions.video.frameRate), 5);
+  assert.equal(await host.evaluate(() => window.testShareTrack.contentHint), 'text');
+
+  await guest.getByRole('button', { name: 'View preferences' }).click();
+  await guest.getByLabel('Pause incoming cameras').check();
+  await guest.getByLabel('Hide my tile from my view').check();
+  await guest.getByRole('button', { name: 'Done', exact: true }).click();
+  await guest.locator('.stat-sample').filter({ hasText: 'Camera' }).waitFor({ state: 'detached' });
+  assert.equal(await guest.locator('.stage .tile video').count(), 0);
+  assert.equal(await guest.locator('.stage .tile').count(), 1);
+  await guest.locator('.share video').waitFor();
+  await guest.getByRole('button', { name: 'View preferences' }).click();
+  await guest.getByLabel('Pause incoming cameras').uncheck();
+  await guest.getByRole('button', { name: 'Done', exact: true }).click();
+  await guest.locator('.stage .tile video').waitFor();
+  await guest.screenshot({ path: resolve(results, 'meetrix-call-statistics.png') });
+  await host.getByRole('button', { name: 'Stop share', exact: true }).click();
+  await guest.getByRole('button', { name: 'Close panel' }).click();
 
   await host.getByRole('button', { name: 'Devices', exact: true }).click();
   const camera = host.getByLabel('Camera device', { exact: true });
@@ -115,7 +197,7 @@ try {
   await host.getByRole('button', { name: 'Leave', exact: true }).click();
   await host.getByRole('button', { name: 'End for everyone' }).click();
   await guest.getByText('You are disconnected from this room.').waitFor();
-  console.log('Settings, media checks, accountless admission, device switching, and meeting end passed.');
+  console.log('Appearance, shortcuts, accessibility, diagnostics, camera pause, screen sharing, and guest meeting checks passed.');
 } finally {
   await browser?.close();
   backend?.stop();

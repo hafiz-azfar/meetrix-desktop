@@ -1,12 +1,46 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AudioLines, Mic, SlidersHorizontal, Video, Volume2 } from 'lucide-react';
+import { Accessibility, AudioLines, Keyboard, Mic, MonitorUp, Palette, SlidersHorizontal, Video, Volume2 } from 'lucide-react';
 import { CameraPreview, DeviceFields, microphoneOptions, SpeakerVolume } from './media-devices.jsx';
+import { defaultShortcuts, meetingShortcuts } from './shortcuts.js';
 
 const sections = [
-  { id: 'audio', title: 'Audio', icon: AudioLines },
-  { id: 'video', title: 'Video', icon: Video },
-  { id: 'meetings', title: 'Meeting defaults', icon: SlidersHorizontal },
+  { id: 'appearance', title: 'Appearance', icon: Palette, Component: AppearanceSettings },
+  { id: 'audio', title: 'Audio', icon: AudioLines, Component: AudioSettings },
+  { id: 'video', title: 'Video', icon: Video, Component: VideoSettings },
+  { id: 'meetings', title: 'Meeting defaults', icon: SlidersHorizontal, Component: MeetingDefaults },
+  { id: 'sharing', title: 'Screen sharing', icon: MonitorUp, Component: SharingSettings },
+  { id: 'accessibility', title: 'Accessibility', icon: Accessibility, Component: AccessibilitySettings },
+  { id: 'shortcuts', title: 'Keyboard shortcuts', icon: Keyboard, Component: ShortcutSettings },
 ];
+
+const viewPreferences = [
+  { key: 'meetingTimer', text: 'Show elapsed time' },
+  { key: 'hideSelf', text: 'Hide my tile from my view' },
+  { key: 'cameraOnly', text: 'Hide tiles for participants with cameras off' },
+  { key: 'showNames', text: 'Show names on video tiles' },
+  { key: 'pauseIncomingCameras', text: 'Pause incoming cameras' },
+];
+
+export function CallViewOptions({ prefs, updatePrefs }) {
+  return <div className="preference-list">
+    {viewPreferences.map(({ key, text }) => <label className="check" key={key}>
+      <input type="checkbox" checked={prefs[key]} onChange={event => updatePrefs({ [key]: event.target.checked })} />{text}
+    </label>)}
+  </div>;
+}
+
+function AppearanceSettings({ prefs, updatePrefs }) {
+  return <>
+    <h2 id="settings-section">Appearance</h2>
+    <div className="settings-card">
+      <label className="default-view">App theme
+        <select value={prefs.theme} onChange={event => updatePrefs({ theme: event.target.value })}>
+          <option value="light">Light</option><option value="dark">Dark</option><option value="system">System</option>
+        </select>
+      </label>
+    </div>
+  </>;
+}
 
 function MicrophoneCheck({ prefs }) {
   const { microphoneId, reduceNoise } = prefs;
@@ -165,18 +199,90 @@ function MeetingDefaults({ prefs, updatePrefs }) {
         onChange={event => updatePrefs({ microphone: !event.target.checked })} /> Mute my microphone when joining</label>
       <label className="check"><input type="checkbox" checked={!prefs.camera}
         onChange={event => updatePrefs({ camera: !event.target.checked })} /> Keep my camera off when joining</label>
+      <label className="check"><input type="checkbox" checked={prefs.confirmLeave}
+        onChange={event => updatePrefs({ confirmLeave: event.target.checked })} /> Confirm before leaving</label>
       <label className="default-view">Starting layout
         <select value={prefs.layout} onChange={event => updatePrefs({ layout: event.target.value })}>
           <option value="grid">Gallery</option><option value="speaker">Speaker</option>
         </select>
       </label>
     </div>
+    <div className="settings-card"><h3>Meeting display</h3><CallViewOptions prefs={prefs} updatePrefs={updatePrefs} /></div>
+  </>;
+}
+
+function SharingSettings({ prefs, updatePrefs }) {
+  return <>
+    <h2 id="settings-section">Screen sharing</h2>
+    <div className="settings-card">
+      <h3>When I present</h3>
+      <label className="default-view">Capture frame rate
+        <select value={prefs.shareFps} onChange={event => updatePrefs({ shareFps: Number(event.target.value) })}>
+          <option value={0}>Automatic</option><option value={5}>Up to 5 fps</option>
+          <option value={15}>Up to 15 fps</option><option value={30}>Up to 30 fps</option>
+        </select>
+      </label>
+      <label className="default-view">Content priority
+        <select value={prefs.shareHint} onChange={event => updatePrefs({ shareHint: event.target.value })}>
+          <option value="">Automatic</option><option value="text">Readable text</option><option value="motion">Smooth motion</option>
+        </select>
+      </label>
+    </div>
+    <div className="settings-card">
+      <h3>While viewing a presentation</h3>
+      <label className="default-view">Shared screen layout
+        <select value={prefs.shareLayout} onChange={event => updatePrefs({ shareLayout: event.target.value })}>
+          <option value="stacked">Participants below</option><option value="side">Side by side</option>
+        </select>
+      </label>
+    </div>
+  </>;
+}
+
+function AccessibilitySettings({ prefs, updatePrefs }) {
+  return <>
+    <h2 id="settings-section">Accessibility</h2>
+    <div className="settings-card">
+      <label className="default-view">Meeting chat text size
+        <select value={prefs.chatSize} onChange={event => updatePrefs({ chatSize: event.target.value })}>
+          <option value="standard">Standard</option><option value="large">Large</option><option value="largest">Extra large</option>
+        </select>
+      </label>
+      <label className="check"><input type="checkbox" checked={prefs.announceMessages}
+        onChange={event => updatePrefs({ announceMessages: event.target.checked })} /> Announce new messages in the open chat panel</label>
+      <label className="check"><input type="checkbox" checked={prefs.reducedMotion}
+        onChange={event => updatePrefs({ reducedMotion: event.target.checked })} /> Reduce motion</label>
+    </div>
+  </>;
+}
+
+const shortcutKeys = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+
+function ShortcutSettings({ prefs, updatePrefs }) {
+  return <>
+    <h2 id="settings-section">Keyboard shortcuts</h2>
+    <div className="settings-card">
+      <label className="check"><input type="checkbox" checked={prefs.shortcutsEnabled}
+        onChange={event => updatePrefs({ shortcutsEnabled: event.target.checked })} /> Enable meeting shortcuts</label>
+      <p className="muted">Use Alt + Shift with the assigned key while the meeting window is focused.</p>
+      <div className="preference-list">
+        {meetingShortcuts.map(({ id, label }) => <label className="default-view" key={id}>{label}
+          <select aria-label={label} value={prefs.shortcuts[id]} disabled={!prefs.shortcutsEnabled}
+            onChange={event => updatePrefs({ shortcuts: { ...prefs.shortcuts, [id]: event.target.value } })}>
+            <option value="">Unassigned</option>
+            {shortcutKeys.map(key => <option key={key} value={key}
+              disabled={meetingShortcuts.some(other => other.id !== id && prefs.shortcuts[other.id] === key)}>Alt + Shift + {key}</option>)}
+          </select>
+        </label>)}
+      </div>
+      <div><button className="button small" onClick={() => updatePrefs({ shortcuts: defaultShortcuts })}>Restore default shortcuts</button></div>
+    </div>
   </>;
 }
 
 export function WorkspaceSettings({ prefs, updatePrefs }) {
   const [section, setSection] = useState('audio');
-  const settings = { prefs, updatePrefs };
+  const { Component } = sections.find(item => item.id === section);
   return <div className="settings-layout">
     <nav className="settings-nav" aria-label="Settings categories">
       {sections.map(({ id, title, icon: Icon }) => <button className="nav-button" key={id}
@@ -185,9 +291,7 @@ export function WorkspaceSettings({ prefs, updatePrefs }) {
       </button>)}
     </nav>
     <section className="settings-content" aria-labelledby="settings-section">
-      {section === 'audio' && <AudioSettings {...settings} />}
-      {section === 'video' && <VideoSettings {...settings} />}
-      {section === 'meetings' && <MeetingDefaults {...settings} />}
+      <Component prefs={prefs} updatePrefs={updatePrefs} />
     </section>
   </div>;
 }

@@ -1,10 +1,15 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Mic, Video, VideoOff, Volume2 } from 'lucide-react';
+import { defaultShortcuts } from './shortcuts.js';
 
 const storageKey = 'meetrix-devices';
 const defaults = {
   camera: false, microphone: false, cameraId: '', microphoneId: '', speakerId: '',
   mirrorCamera: true, reduceNoise: true, speakerVolume: 1, layout: 'grid',
+  theme: 'light', meetingTimer: false, hideSelf: false, cameraOnly: false, showNames: true,
+  confirmLeave: false, pauseIncomingCameras: false, shareFps: 0, shareHint: '', shareLayout: 'stacked',
+  chatSize: 'standard', announceMessages: true, reducedMotion: false,
+  shortcutsEnabled: true, shortcuts: defaultShortcuts,
 };
 const fields = [
   { key: 'microphone', kind: 'audioinput', label: 'Microphone', Icon: Mic },
@@ -14,13 +19,17 @@ const fields = [
 
 export function useDevicePreferences() {
   const [prefs, setPrefs] = useState(() => {
-    try { return { ...defaults, ...JSON.parse(localStorage.getItem(storageKey) || '{}') }; }
+    try {
+      const saved = JSON.parse(localStorage.getItem(storageKey) || '{}') ?? {};
+      return { ...defaults, ...saved, shortcuts: { ...defaultShortcuts, ...saved.shortcuts } };
+    }
     catch { return defaults; }
   });
   useEffect(() => {
     try { localStorage.setItem(storageKey, JSON.stringify(prefs)); } catch { /* Keep settings in memory. */ }
   }, [prefs]);
-  return [prefs, changes => setPrefs(prior => ({ ...prior, ...changes }))];
+  const updatePrefs = useCallback(changes => setPrefs(prior => ({ ...prior, ...changes })), []);
+  return [prefs, updatePrefs];
 }
 
 export function captureOptions(id) {

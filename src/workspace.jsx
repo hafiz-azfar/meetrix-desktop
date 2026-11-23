@@ -8,7 +8,7 @@ import { apiFor, calendarInvite, invitation, parseInvitation } from './api.js';
 import { generateRoomKey, validRoomKey } from './encryption.js';
 import { Logo, Dialog } from './ui.jsx';
 import { Notes } from './notes.jsx';
-import { CameraPreview, DeviceFields, useDevicePreferences } from './media-devices.jsx';
+import { CameraPreview, DeviceFields } from './media-devices.jsx';
 import { WorkspaceSettings } from './settings.jsx';
 
 const Conference = lazy(() => import('./conference.jsx').then(module => ({ default: module.Conference })));
@@ -155,9 +155,8 @@ function Preflight({ target, prefs, updatePrefs, api, name, close, onConnected, 
   </Dialog>;
 }
 
-export function GuestMeeting({ code, onBack }) {
+export function GuestMeeting({ code, onBack, prefs, updatePrefs }) {
   const api = useMemo(apiFor, []);
-  const [prefs, updatePrefs] = useDevicePreferences();
   const [target, setTarget] = useState(null);
   const [session, setSession] = useState(null);
 
@@ -182,7 +181,7 @@ export function GuestMeeting({ code, onBack }) {
   </main>;
 }
 
-export function Workspace({ config, user, accountControl }) {
+export function Workspace({ config, user, accountControl, prefs, updatePrefs }) {
   const name = (user?.fullName || user?.username || user?.firstName || 'Participant').slice(0, 60);
   const api = useMemo(apiFor, []);
   const [page, setPage] = useState('home');
@@ -195,7 +194,6 @@ export function Workspace({ config, user, accountControl }) {
   const [editing, setEditing] = useState(null);
   const [archived, setArchived] = useState(null);
   const [session, setSession] = useState(null);
-  const [prefs, updatePrefs] = useDevicePreferences();
   function refresh() {
     setLoading(true);
     api('/meetings').then(setMeetings).catch(error => setNotice(error.message)).finally(() => setLoading(false));
