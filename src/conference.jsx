@@ -6,7 +6,7 @@ import {
 import { ConnectionState, RoomEvent, ScreenSharePresets, Track } from 'livekit-client';
 import { createEncryptedRoom } from './encrypted-room.js';
 import {
-  ChartNoAxesColumn, Clipboard, FileText, Grid2X2, Hand, Lock, LockOpen, MessageSquare, Mic, MicOff, MonitorUp, SmilePlus,
+  Captions, ChartNoAxesColumn, CircleDot, Clipboard, FileText, Grid2X2, Hand, Lock, LockOpen, MessageSquare, Mic, MicOff, MonitorUp, SmilePlus,
   Gauge, Maximize, PanelsTopLeft, PenTool, PhoneOff, Send, Settings2, ShieldCheck, SlidersHorizontal, UserMinus, Users, Video, VideoOff, X,
 } from 'lucide-react';
 import { invitation } from './api.js';
@@ -19,6 +19,8 @@ import { CallViewOptions } from './settings.jsx';
 import { CallStatistics } from './call-statistics.jsx';
 import { shortcutFor } from './shortcuts.js';
 import { BreakoutRooms } from './breakout-rooms.jsx';
+import { CaptionsOverlay, CaptionsPanel, useManualCaptions } from './meeting-captions.jsx';
+import { RecordingBanner, RecordingPanel, useMeetingRecording } from './meeting-recording.jsx';
 import { placementTopic, useRoomPlacement } from './room-placement.js';
 
 const videoOptions = { adaptiveStream: true, dynacast: true, stopLocalTrackOnUnpublish: true };
@@ -29,7 +31,7 @@ const decoder = new TextDecoder();
 const reactions = ['👍', '👏', '🎉', '❤️'];
 const panelTitles = {
   people: 'Participants', chat: 'Meeting chat', polls: 'Polls', board: 'Whiteboard', notes: 'Notes',
-  quality: 'Call statistics', breakouts: 'Breakout rooms',
+  quality: 'Call statistics', breakouts: 'Breakout rooms', captions: 'Live captions', recording: 'Local recording',
 };
 
 function initials(name) {
@@ -130,6 +132,9 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, refr
   const online = connection === ConnectionState.Connected;
   const ended = joinedAt != null && connection === ConnectionState.Disconnected;
   const collaboration = !session.meeting.encrypted && !session.accountless && !session.breakoutName;
+  const meetingTools = !session.meeting.encrypted && !session.breakoutName;
+  const captions = useManualCaptions(room, { enabled: meetingTools, hostIdentity: session.hostIdentity });
+  const recording = useMeetingRecording(room, { enabled: meetingTools, hostIdentity: session.hostIdentity, host, meetingId: id });
 
   async function run(operation) {
     setError('');
@@ -271,6 +276,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, refr
 
   async function exit(end) {
     setExiting(true);
+    await recording.finishForExit();
     if (end && !(await moderate({ action: 'end' }))) { setExiting(false); return; }
     await room.disconnect().catch(() => {});
     if (document.fullscreenElement === document.documentElement) await document.exitFullscreen().catch(() => {});
@@ -370,9 +376,10 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, refr
       <span>{error || connectionError || (ended ? 'You are disconnected from this room.' : toast)}</span>
       {(error || toast) && <button className="icon-button" aria-label="Dismiss notice" onClick={() => { setError(''); setToast(''); }}><X size={17} /></button>}
     </div>}
+    {meetingTools && <RecordingBanner recording={recording} host={host} />}
     <div className="call-body">
       {reaction && <div className="reaction-toast" role="status"><span>{reaction.emoji}</span> {reaction.from}</div>}
-      <section className={stageClass} aria-label="Meeting stage">
+      <div className="stage-wrap"><section className={stageClass} aria-label="Meeting stage">
         {!online && !participants.length ? <div className="empty"><Video size={28} /><strong>{ended ? 'Meeting connection closed' : 'Connecting to the room'}</strong></div> : null}
         {activeShare && <div className="share"><VideoTrack trackRef={activeShare} /><span>{activeShare.participant.name || 'Guest'} is sharing</span></div>}
         {online && !display.length && !activeShare && <div className="empty"><VideoOff size={28} /><strong>There are no visible participant tiles.</strong></div>}
@@ -381,7 +388,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, refr
             isHost={participant.identity === session.hostIdentity} raised={hands[participant.identity]} mirror={prefs.mirrorCamera}
             showNames={prefs.showNames} pauseCamera={prefs.pauseIncomingCameras && !participant.isLocal} />)}
         </div>
-      </section>
+      </section>{meetingTools && !ended && <CaptionsOverlay captions={captions} />}</div>
       {panel && <aside className="call-side"><div className="dialog-head"><h2>{panelTitles[panel]}</h2><button className="icon-button" aria-label="Close panel" onClick={() => setPanel('')}><X size={18} /></button></div>
         {panel === 'people' && <>
           {host && <div className="host-actions"><button className="button" onClick={() => moderate({ action: 'lock', locked: !locked })}>{locked ? <Lock size={16} /> : <LockOpen size={16} />}{locked ? 'Unlock room' : 'Lock room'}</button></div>}
@@ -406,6 +413,8 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, refr
         {panel === 'polls' && <Polls api={api} id={id} host={host} />}
         {panel === 'board' && <Whiteboard api={api} id={id} host={host} />}
         {panel === 'quality' && <CallStatistics room={room} online={online} />}
+        {panel === 'captions' && <CaptionsPanel captions={captions} host={host} online={online} meetingId={id} />}
+        {panel === 'recording' && <RecordingPanel recording={recording} participants={participants} online={online} />}
         {panel === 'breakouts' && <BreakoutRooms api={api} meetingId={id} participants={participants}
           removeParticipant={identity => moderate({ action: 'remove', identity })} />}
       </aside>}
@@ -417,6 +426,8 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, refr
       <button className="call-control" disabled={!online} aria-pressed={isScreenShareEnabled} onClick={toggleShare}><MonitorUp size={20} /><span>{isScreenShareEnabled ? 'Stop share' : 'Share'}</span></button>
       <button className="call-control" aria-pressed={panel === 'people'} onClick={() => togglePanel('people')}><Users size={20} /><span>People {participants.length + guests.length}</span></button>
       <button className="call-control" aria-pressed={panel === 'chat'} onClick={() => togglePanel('chat')}><MessageSquare size={20} /><span>Chat</span></button>
+      {meetingTools && <button className="call-control" aria-pressed={panel === 'captions'} onClick={() => togglePanel('captions')}><Captions size={20} /><span>Captions</span></button>}
+      {meetingTools && host && <button className="call-control" aria-pressed={panel === 'recording'} onClick={() => togglePanel('recording')}><CircleDot size={20} /><span>Record</span></button>}
       {host && !session.meeting.encrypted && <button className="call-control" disabled={!online}
         aria-pressed={panel === 'breakouts'} onClick={() => togglePanel('breakouts')}>
         <PanelsTopLeft size={20} /><span>Breakouts</span>
@@ -441,6 +452,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, refr
     </Dialog>}
     {confirmation && <Dialog title="Leave the meeting?" close={() => setConfirmation(false)}>
       {host && !ended && <p className="muted"><ShieldCheck size={16} /> Ending the meeting disconnects everyone and closes its invite.</p>}
+      {host && (recording.state?.phase === 'active' || recording.file || recording.saving) && <p className="muted">Meetrix will save your local recording before you leave.</p>}
       <div className="dialog-actions">
         <button className="button" disabled={exiting} onClick={() => exit(false)}>Leave room</button>
         {host && !ended && <button className="button danger" disabled={exiting} onClick={() => exit(true)}>End for everyone</button>}

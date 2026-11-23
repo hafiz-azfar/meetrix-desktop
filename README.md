@@ -41,6 +41,8 @@ Meetrix keys account ownership by the InsForge project and user ID. Earlier Cler
 - Host moderation, passcodes, room locks, waiting rooms, and participant removal.
 - Hosts can allow invitees without accounts. The waiting room still applies, and the host sees those invitees labeled as unverified guests.
 - For standard meetings, hosts can use **Breakouts** to name up to eight rooms, assign connected guests manually or evenly, and send text announcements. **Close all rooms** returns guests to the main meeting. The host stays in the main room. Automatic moves start with the microphone and camera off.
+- In the main room of a standard meeting, open **Captions** to read captions typed by the host, show or hide them over the stage, or save the caption history received on this device as a text file.
+- Hosts can open **Record**, request permission from everyone in the main room, and start once every connected participant agrees. Meetrix records available meeting audio and the shared screen or up to nine camera tiles. The recording stops if the participant list changes or someone withdraws consent. Use **Save WebM** to keep the file. Recordings stay on the host device and are capped at 30 minutes or approximately 180 MiB per file.
 - Shared notes, polls, and whiteboards. Encrypted rooms use a shared, client-generated key for LiveKit media and in-room data.
 
 [Feature comparison](replica/parity.md) · [Security model](SECURITY.md)

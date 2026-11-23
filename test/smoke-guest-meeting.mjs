@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { chromium } from 'playwright';
 import { startLocal } from '../desktop/local.cjs';
@@ -194,6 +194,57 @@ try {
   await host.getByRole('button', { name: 'Done', exact: true }).click();
   await guest.waitForFunction(() => Array.from(document.querySelectorAll('.stage video')).some(video => video.readyState >= 2));
 
+  await host.getByRole('button', { name: 'Captions', exact: true }).click();
+  await guest.getByRole('button', { name: 'Captions', exact: true }).click();
+  assert.equal(await guest.getByRole('textbox', { name: 'Caption text' }).count(), 0);
+  await host.getByRole('textbox', { name: 'Caption text' }).fill('The demo starts now.');
+  await host.getByRole('button', { name: 'Send caption' }).click();
+  const overlay = guest.locator('.caption-overlay').getByText('The demo starts now.');
+  await overlay.waitFor();
+  await guest.getByLabel('Show captions on stage').uncheck();
+  await overlay.waitFor({ state: 'detached' });
+  await guest.getByRole('region', { name: 'Caption history' }).getByText('The demo starts now.').waitFor();
+  const captionDownload = guest.waitForEvent('download');
+  await guest.getByRole('button', { name: 'Save caption history' }).click();
+  const captionFile = await captionDownload;
+  assert.match(captionFile.suggestedFilename(), /-captions\.txt$/);
+  assert.match(await readFile(await captionFile.path(), 'utf8'), /The demo starts now\./);
+
+  assert.equal(await guest.getByRole('button', { name: 'Record', exact: true }).count(), 0);
+  await host.getByRole('button', { name: 'Unmute', exact: true }).click();
+  await host.getByRole('button', { name: 'Mute', exact: true }).waitFor();
+  await host.getByRole('button', { name: 'Record', exact: true }).click();
+  await host.getByRole('button', { name: 'Request recording' }).click();
+  const startRecording = host.getByRole('button', { name: 'Start recording', exact: true });
+  await guest.getByRole('button', { name: 'Allow recording' }).waitFor();
+  assert.equal(await startRecording.isDisabled(), true);
+  await guest.getByRole('button', { name: 'Decline recording' }).click();
+  await host.locator('.recording-consent').getByText('Declined', { exact: true }).waitFor();
+  assert.equal(await startRecording.isDisabled(), true);
+  await guest.getByRole('button', { name: 'Allow recording' }).click();
+  await host.locator('.recording-consent').getByText('Allowed', { exact: true }).waitFor();
+  await host.bringToFront();
+  await startRecording.click();
+  await host.getByRole('button', { name: 'Stop recording' }).waitFor();
+  await guest.getByText('Meeting recording is active.', { exact: true }).waitFor();
+  await host.screenshot({ path: resolve(results, 'meetrix-recording.png') });
+  await guest.getByRole('button', { name: 'Withdraw consent' }).click();
+  await host.getByText('Recording stopped because a participant withdrew consent.').waitFor();
+  await guest.getByText('Meeting recording is active.', { exact: true }).waitFor({ state: 'detached' });
+  const videoDownload = host.waitForEvent('download');
+  await host.getByRole('button', { name: 'Save WebM' }).click();
+  const videoFile = await videoDownload;
+  assert.match(videoFile.suggestedFilename(), /\.webm$/);
+  const recording = await readFile(await videoFile.path());
+  assert.ok(recording.length > 500);
+  assert.equal(recording.subarray(0, 4).toString('hex'), '1a45dfa3');
+  await videoFile.saveAs(resolve(results, 'meetrix-consented-test.webm'));
+
+  await host.getByRole('button', { name: 'Request recording' }).click();
+  await guest.getByRole('button', { name: 'Allow recording' }).click();
+  await startRecording.click();
+  await host.getByRole('button', { name: 'Stop recording' }).waitFor();
+
   const sections = [['Design partner', '0'], ['Workshop guest', '1']];
   const otherGuests = await Promise.all(sections.map(async ([name]) => {
     const page = await browser.newPage({ permissions: ['camera', 'microphone'] });
@@ -211,6 +262,11 @@ try {
     await host.locator('.waiting-person').filter({ hasText: name }).getByRole('button', { name: 'Admit', exact: true }).click();
   }
   await host.getByRole('button', { name: 'People 4', exact: true }).waitFor();
+  await host.getByRole('button', { name: 'Record', exact: true }).click();
+  await host.getByText('Recording stopped because the participant list changed.').waitFor();
+  await host.getByRole('button', { name: 'Save WebM' }).waitFor();
+  await host.getByRole('button', { name: 'Discard', exact: true }).click();
+  for (const page of otherGuests) assert.equal(await page.locator('.recording-banner').count(), 0);
   await guest.getByRole('button', { name: 'Camera', exact: true }).click();
   await guest.locator('button[aria-pressed="true"]').filter({ hasText: /^Camera$/ }).waitFor();
   await host.getByRole('button', { name: 'Breakouts', exact: true }).click();
@@ -248,7 +304,7 @@ try {
   await host.getByRole('button', { name: 'Leave', exact: true }).click();
   await host.getByRole('button', { name: 'End for everyone' }).click();
   await guest.getByText('You are disconnected from this room.').waitFor();
-  console.log('Meeting settings and four-client breakout checks passed, including room isolation and return.');
+  console.log('Meeting settings, four-client breakouts, caption export, and consent-gated WebM recording checks passed.');
 } finally {
   await browser?.close();
   backend?.stop();
