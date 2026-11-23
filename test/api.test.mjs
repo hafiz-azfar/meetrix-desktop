@@ -14,10 +14,14 @@ const livekitSecret = 'not-a-real-secret-at-least-32-bytes';
 async function fixture(t) {
   const calls = [];
   const livePeople = new Map();
+  const failedRemovals = new Set();
   const rooms = {
     async createRoom(details) { calls.push(['open', details]); },
     async deleteRoom(id) { calls.push(['end', id]); },
-    async removeParticipant(id, identity) { calls.push(['remove', id, identity]); },
+    async removeParticipant(id, identity, options) {
+      calls.push(['remove', id, identity, options]);
+      if (failedRemovals.has(identity)) throw new Error('LiveKit is unavailable');
+    },
     async getParticipant(_id, identity) {
       if (!livePeople.has(identity)) throw Object.assign(new Error('Participant is absent'), { status: 404 });
       return livePeople.get(identity);
@@ -52,7 +56,7 @@ async function fixture(t) {
   const create = input => api('/meetings', { method: 'POST', body: { title: 'Roadmap', name: 'Owner', ...input } });
   const connect = (id, token, input = {}) => api('/meetings/' + id + '/connect', { method: 'POST', token, body: { name: token, ...input } });
   const moderate = (id, body, token = 'owner') => api('/meetings/' + id + '/moderate', { method: 'POST', body, token });
-  return { api, create, connect, moderate, calls, livePeople };
+  return { api, create, connect, moderate, calls, livePeople, failedRemovals };
 }
 
 test('InsForge and LiveKit production configuration are pinned', () => {
@@ -204,7 +208,7 @@ test('breakout grants are limited to an admitted guest and one active room', asy
   assert.equal((await open([...plan, { name: 'Observer', members: ['guest'] }])).status, 400);
   assert.equal((await open([{ name: 'Hosts', members: ['owner'] }])).status, 404);
   assert.deepEqual((await place(guest.routingKey, meeting.id)).json,
-    { roomId: meeting.id, hostIdentity: 'owner', hostVersion: 0, coHosts: [] });
+    { roomId: meeting.id, hostIdentity: 'owner', hostVersion: 0, coHosts: [], placementEpoch: 0 });
   const retry = (await connect(meeting.id, 'guest')).json;
   assert.notEqual(retry.routingKey, guest.routingKey);
   assert.equal((await place(guest.routingKey, meeting.id)).status, 200);
@@ -245,6 +249,66 @@ test('breakout grants are limited to an admitted guest and one active room', asy
     method: 'POST', body: { action: 'open', rooms: plan },
   });
   assert.equal(encryptedAttempt.status, 403);
+});
+
+test('the waiting room blocks media grants and collaboration until an attendee is readmitted', async t => {
+  const { api, create, connect, moderate, calls, failedRemovals, livePeople } = await fixture(t);
+  const { id } = (await create({ lobby: false })).json;
+  const path = '/meetings/' + id;
+  const wait = (identity, token) => moderate(id, { action: 'wait', identity }, token);
+  const admit = identity => moderate(id, { action: 'decide', identity, admit: true });
+  const place = (key, roomId, placementEpoch) => api(path + '/placement', {
+    token: '', method: 'POST', body: { key, roomId, placementEpoch },
+  });
+  await connect(id, 'owner');
+  const guest = (await connect(id, 'guest')).json;
+  await connect(id, 'stranger');
+  await connect(id, 'attendee');
+  for (const identity of ['stranger', 'attendee']) {
+    const sid = 'PA_' + identity;
+    livePeople.set(identity, { identity, sid, state: ParticipantInfo_State.ACTIVE, tracks: [] });
+    assert.equal((await moderate(id, { action: 'co-host', identity, sid, enabled: true })).status, 200);
+  }
+
+  assert.equal((await wait('stranger', 'guest')).status, 403);
+  assert.equal((await wait('owner', 'stranger')).status, 403);
+  assert.equal((await wait('attendee', 'stranger')).status, 403);
+  assert.equal((await api(path + '/breakouts', { method: 'POST', body: {
+    action: 'open', rooms: [{ name: 'Planning', members: ['guest'] }],
+  } })).status, 200);
+  const inBreakout = (await place(guest.routingKey, id, guest.placementEpoch)).json;
+
+  failedRemovals.add('guest');
+  assert.equal((await wait('guest', 'stranger')).status, 502);
+  assert.equal((await admit('guest')).status, 409);
+  assert.equal((await api(path + '/lobby')).json.guests[0].evicting, true);
+  assert.deepEqual((await place(guest.routingKey, inBreakout.roomId, guest.placementEpoch)).json, {
+    waiting: true, placementEpoch: 1,
+  });
+  assert.equal((await connect(id, 'guest')).json.token, undefined);
+  assert.equal((await api(path + '/notes', { token: 'guest' })).status, 403);
+
+  failedRemovals.delete('guest');
+  assert.equal((await wait('guest', 'stranger')).status, 200);
+  assert.equal((await api(path + '/lobby')).json.guests[0].evicting, false);
+  assert.ok(calls.some(([event, room, identity, options]) =>
+    event === 'remove' && room === inBreakout.roomId && identity === 'guest' && typeof options?.revokeTokenTs === 'bigint'));
+  assert.equal((await admit('guest')).status, 200);
+  const readmitted = (await place(guest.routingKey, inBreakout.roomId, guest.placementEpoch)).json;
+  assert.equal(readmitted.roomId, id);
+  assert.equal(readmitted.placementEpoch, 1);
+  const claims = await new TokenVerifier(livekitKey, livekitSecret).verify(readmitted.token);
+  assert.equal(claims.video.room, id);
+  assert.equal(claims.sub, 'guest');
+  assert.equal((await api(path + '/breakouts')).json.rooms[0].members.length, 0);
+  assert.equal((await place(guest.routingKey, id, guest.placementEpoch)).status, 200);
+  assert.ok((await place(guest.routingKey, id, guest.placementEpoch)).json.token);
+  assert.equal((await place(guest.routingKey, id, 1)).json.token, undefined);
+  assert.equal((await api(path + '/notes', { token: 'guest' })).status, 200);
+
+  assert.equal((await wait('guest', 'stranger')).status, 200);
+  assert.equal((await moderate(id, { action: 'decide', identity: 'guest', admit: false })).status, 200);
+  assert.equal((await place(guest.routingKey, id, 1)).status, 403);
 });
 
 test('co-hosts can moderate only while their assigned LiveKit session is connected', async t => {

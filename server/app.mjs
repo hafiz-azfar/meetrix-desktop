@@ -1,6 +1,7 @@
 import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import { resolve } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import express from 'express';
 import helmet from 'helmet';
 import { rateLimit } from 'express-rate-limit';
@@ -35,6 +36,7 @@ const guestJoin = join.extend({ proof: z.string().regex(/^[a-f0-9]{32}$/) });
 const routingRequest = z.object({
   key: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
   roomId: z.string().regex(/^(?:breakout_)?[A-Za-z0-9_-]{16}$/),
+  placementEpoch: z.number().int().nonnegative().safe().default(0),
 }).strict();
 const breakoutCommand = z.discriminatedUnion('action', [
   z.object({ action: z.literal('open'), rooms: z.array(z.object({
@@ -58,6 +60,7 @@ const moderation = z.discriminatedUnion('action', [
   z.object({ action: z.literal('ask-unmute'), identity: participantIdentity }).strict(),
   z.object({ action: z.literal('stop-video'), identity: participantIdentity }).strict(),
   z.object({ action: z.literal('mute-all') }).strict(),
+  z.object({ action: z.literal('wait'), identity: participantIdentity }).strict(),
   z.object({ action: z.literal('remove'), identity: participantIdentity }).strict(),
   z.object({ action: z.literal('end') }).strict(),
 ]);
@@ -130,6 +133,12 @@ export function createApp(options, dependencies = {}) {
   const revokeCoHost = db.prepare('DELETE FROM meeting_cohosts WHERE meeting = ? AND identity = ?');
   const clearCoHosts = db.prepare('DELETE FROM meeting_cohosts WHERE meeting = ?');
   const setDecision = db.prepare('UPDATE attendance SET decision = ? WHERE meeting = ? AND identity = ?');
+  const beginWaiting = db.prepare(`UPDATE attendance SET decision = 'pending', requested_at = ?,
+    placement_epoch = placement_epoch + 1, waiting_evicting = 1 WHERE meeting = ? AND identity = ?`);
+  const finishWaiting = db.prepare('UPDATE attendance SET waiting_evicting = 0 WHERE meeting = ? AND identity = ?');
+  const waitingEvictions = db.prepare(`SELECT attendance.meeting, attendance.identity FROM attendance
+    JOIN meetings ON meetings.id = attendance.meeting
+    WHERE attendance.waiting_evicting = 1 AND meetings.stopped_at IS NULL LIMIT 50`);
   const log = db.prepare('INSERT INTO audit(meeting, actor, event, subject, created_at) VALUES(?, ?, ?, ?, ?)');
   const start = db.prepare('UPDATE meetings SET opened_at = ? WHERE id = ? AND opened_at IS NULL');
   const markEnded = db.prepare('UPDATE meetings SET stopped_at = COALESCE(stopped_at, ?) WHERE id = ?');
@@ -201,14 +210,20 @@ export function createApp(options, dependencies = {}) {
       if (meetingEnded(current)) throw new RequestError(410, 'This meeting has ended.');
       const identity = breakouts.identity(current.id, input.key);
       const participant = identity && findGuest.get(current.id, identity);
+      if (!current.encrypted && participant?.decision === 'pending') {
+        return { waiting: true, placementEpoch: participant.placement_epoch };
+      }
       if (!identity || current.encrypted || (identity !== activeHost(current) && participant?.decision !== 'admitted')) {
         throw new RequestError(403, 'Your meeting session is no longer active.');
       }
       const target = currentLocation(current.id, identity);
       const roles = meetingRoles(current, target.roomId);
-      if (target.roomId === input.roomId) return { roomId: target.roomId, ...roles };
+      const placementEpoch = participant?.placement_epoch ?? 0;
+      if (target.roomId === input.roomId && placementEpoch === input.placementEpoch) {
+        return { roomId: target.roomId, ...roles, placementEpoch };
+      }
       await ensureMediaRoom(target.roomId);
-      return { ...target, ...roles, token: await mediaToken(target.roomId, identity, participant?.name ?? current.owner_name) };
+      return { ...target, ...roles, placementEpoch, token: await mediaToken(target.roomId, identity, participant?.name ?? current.owner_name) };
     });
     res.json(grant);
   });
@@ -339,6 +354,31 @@ export function createApp(options, dependencies = {}) {
     return media(client => client.sendData?.(room, Uint8Array.of(1), DataPacket_Kind.RELIABLE,
       { topic: placementTopic, destinationIdentities: identities })).catch(() => {});
   }
+  function participantRooms(meeting, identity) {
+    return [meeting, ...breakouts.assignedUncleaned(meeting, identity).map(room => room.id)];
+  }
+  function removeFromRooms(roomIds, identity, options) {
+    return media(async client => {
+      const results = await Promise.allSettled(roomIds.map(room => client.removeParticipant(room, identity, options)));
+      const failure = results.find(result => result.status === 'rejected' && !isNotFound(result.reason));
+      if (failure) throw failure.reason;
+    });
+  }
+  async function completeWaitingEviction(meeting, identity) {
+    if (!findGuest.get(meeting, identity)?.waiting_evicting) return;
+    const roomIds = participantRooms(meeting, identity);
+    // LiveKit Cloud rejects tokens issued before this timestamp. Wait for the
+    // cutoff before allowing a moderator to issue a fresh admission.
+    const cutoff = Math.floor(Date.now() / 1000) + 1;
+    await Promise.all([
+      removeFromRooms(roomIds, identity, { revokeTokenTs: BigInt(cutoff) }),
+      ...roomIds.map(room => signalPlacement(room, [identity])),
+    ]);
+    const remaining = cutoff * 1000 - Date.now();
+    if (remaining > 0) await delay(remaining);
+    breakouts.removeMember(meeting, identity);
+    finishWaiting.run(meeting, identity);
+  }
   function meetingRoles(meeting, roomId = meeting.id) {
     return { hostIdentity: activeHost(meeting), hostVersion: meeting.host_version,
       coHosts: !meeting.encrypted && roomId === meeting.id ? listCoHosts.all(meeting.id) : [] };
@@ -384,7 +424,8 @@ export function createApp(options, dependencies = {}) {
       });
       db.exec('COMMIT');
     } catch (error) { db.exec('ROLLBACK'); throw error; }
-    res.status(201).json({ ...view(findMeeting.get(ids[0]), req.identity), scheduledCount: ids.length });
+    const scheduledMeetings = ids.map(id => view(findMeeting.get(id), req.identity));
+    res.status(201).json({ ...scheduledMeetings[0], scheduledCount: scheduledMeetings.length, scheduledMeetings });
   });
 
   api.patch('/meetings/:id', byIdentity(30), async (req, res) => {
@@ -433,10 +474,12 @@ export function createApp(options, dependencies = {}) {
       const location = currentLocation(current.id, identity);
       // Recreate an idle room with the same capacity after LiveKit expires it.
       if (current.opened_at) await ensureMediaRoom(location.roomId);
-      const name = findGuest.get(current.id, identity)?.name ?? current.owner_name;
+      const attendance = findGuest.get(current.id, identity);
+      const name = attendance?.name ?? current.owner_name;
       const token = await mediaToken(location.roomId, identity, name);
       const routingKey = current.encrypted ? undefined : breakouts.issueKey(current.id, identity);
-      return { state: 'ready', serverUrl: livekitUrl, token, ...location, routingKey, ...meetingRoles(current, location.roomId),
+      return { state: 'ready', serverUrl: livekitUrl, token, ...location, routingKey,
+        placementEpoch: attendance?.placement_epoch ?? 0, ...meetingRoles(current, location.roomId),
         meeting: view(findMeeting.get(current.id), identity), accountless };
     });
   }
@@ -448,8 +491,9 @@ export function createApp(options, dependencies = {}) {
   api.get('/meetings/:id/lobby', async (req, res) => {
     const meeting = meetingFor(req);
     await requireModerator(meeting, req.identity);
-    const guests = db.prepare("SELECT identity, name, requested_at AS requestedAt FROM attendance WHERE meeting = ? AND decision = 'pending' ORDER BY requested_at LIMIT 100")
-      .all(meeting.id).map(guest => ({ ...guest, accountless: guest.identity.startsWith('guest_') }));
+    const guests = db.prepare(`SELECT identity, name, requested_at AS requestedAt, waiting_evicting AS evicting
+      FROM attendance WHERE meeting = ? AND decision = 'pending' ORDER BY requested_at LIMIT 100`)
+      .all(meeting.id).map(guest => ({ ...guest, evicting: Boolean(guest.evicting), accountless: guest.identity.startsWith('guest_') }));
     res.json({ guests, locked: !!meeting.locked, ...meetingRoles(findMeeting.get(meeting.id)) });
   });
 
@@ -571,26 +615,37 @@ export function createApp(options, dependencies = {}) {
         }
         rolesChanged = true;
       }
-      if (['mute', 'ask-unmute', 'stop-video', 'remove'].includes(command.action) &&
+      if (['mute', 'ask-unmute', 'stop-video', 'wait', 'remove'].includes(command.action) &&
           (command.identity === hostIdentity ||
            (!host && (command.identity === req.identity || await isActiveCoHost(current, command.identity))))) {
         throw new RequestError(403, 'That participant is protected from this action.');
       }
       if (command.action === 'lock') db.prepare('UPDATE meetings SET locked = ? WHERE id = ?').run(Number(command.locked), current.id);
       if (command.action === 'decide') {
-        if (findGuest.get(current.id, command.identity)?.decision !== 'pending') throw new RequestError(409, 'This request has already been handled.');
+        const guest = findGuest.get(current.id, command.identity);
+        if (guest?.decision !== 'pending') throw new RequestError(409, 'This request has already been handled.');
+        if (guest.waiting_evicting) throw new RequestError(409, 'The participant is still being disconnected from the meeting.');
         setDecision.run(command.admit ? 'admitted' : 'denied', current.id, command.identity);
+      }
+      if (command.action === 'wait') {
+        if (current.encrypted) throw new RequestError(403, 'Moving participants to the waiting room is unavailable in encrypted meetings.');
+        const guest = findGuest.get(current.id, command.identity);
+        if (!guest?.waiting_evicting) {
+          admit(current, command.identity);
+          beginWaiting.run(Date.now(), current.id, command.identity);
+          revokeCoHost.run(current.id, command.identity);
+          log.run(current.id, req.identity, 'wait', command.identity, Date.now());
+        }
+        await completeWaitingEviction(current.id, command.identity);
+        await signalPlacement(current.id);
+        return meetingRoles(current);
       }
       if (command.action === 'remove') {
         const guest = findGuest.get(current.id, command.identity);
         if (!guest || guest.decision === 'pending') throw new RequestError(404, 'Participant not found.');
         setDecision.run('denied', current.id, command.identity);
         rolesChanged = !!revokeCoHost.run(current.id, command.identity).changes;
-        const roomIds = [current.id, ...breakouts.assignedUncleaned(current.id, command.identity).map(room => room.id)];
-        await media(client => Promise.all(roomIds.map(async name => {
-          try { await client.removeParticipant(name, command.identity); }
-          catch (error) { if (!isNotFound(error)) throw error; }
-        })));
+        await removeFromRooms(participantRooms(current.id, command.identity), command.identity);
       }
       if (command.action === 'mute' || command.action === 'stop-video') {
         admit(current, command.identity);
@@ -765,6 +820,10 @@ export function createApp(options, dependencies = {}) {
     for (const { meeting } of breakouts.pendingMeetings()) {
       try { await serial(meeting, () => cleanupBreakouts(meeting)); }
       catch { console.error('Breakout cleanup is pending.'); }
+    }
+    for (const { meeting, identity } of waitingEvictions.all()) {
+      try { await serial(meeting, () => completeWaitingEviction(meeting, identity)); }
+      catch { console.error('Waiting room cleanup is pending.'); }
     }
   }, 30000);
   timer.unref();

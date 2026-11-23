@@ -61,6 +61,8 @@ export function openDatabase(filename) {
       name TEXT NOT NULL,
       decision TEXT NOT NULL CHECK(decision IN ('pending', 'admitted', 'denied')),
       requested_at INTEGER NOT NULL,
+      placement_epoch INTEGER NOT NULL DEFAULT 0,
+      waiting_evicting INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (meeting, identity)
     ) STRICT;
     CREATE INDEX IF NOT EXISTS attendance_by_identity ON attendance(identity);
@@ -138,5 +140,8 @@ export function openDatabase(filename) {
   if (!columns.has('allow_guests')) {
     db.exec('ALTER TABLE meetings ADD COLUMN allow_guests INTEGER NOT NULL DEFAULT 0');
   }
+  const attendanceColumns = new Set(db.prepare('PRAGMA table_info(attendance)').all().map(column => column.name));
+  if (!attendanceColumns.has('placement_epoch')) db.exec('ALTER TABLE attendance ADD COLUMN placement_epoch INTEGER NOT NULL DEFAULT 0');
+  if (!attendanceColumns.has('waiting_evicting')) db.exec('ALTER TABLE attendance ADD COLUMN waiting_evicting INTEGER NOT NULL DEFAULT 0');
   return db;
 }

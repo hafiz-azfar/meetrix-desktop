@@ -7,7 +7,7 @@ import { ConnectionState, createLocalVideoTrack, RoomEvent, ScreenSharePresets, 
 import { createEncryptedRoom } from './encrypted-room.js';
 import {
   Captions, ChartNoAxesColumn, CircleDot, Clipboard, Crown, FileText, Grid2X2, Hand, Lock, LockOpen, MessageSquare, Mic, MicOff, MonitorUp, SmilePlus,
-  Gauge, Maximize, PanelsTopLeft, PenTool, PhoneOff, Send, Settings2, ShieldCheck, ShieldMinus, ShieldPlus, SlidersHorizontal, UserMinus, Users, Video, VideoOff, X,
+  Gauge, Hourglass, Maximize, PanelsTopLeft, PenTool, PhoneOff, Send, Settings2, ShieldCheck, ShieldMinus, ShieldPlus, SlidersHorizontal, UserMinus, Users, Video, VideoOff, X,
 } from 'lucide-react';
 import { invitation } from './api.js';
 import { Notes } from './notes.jsx';
@@ -23,6 +23,7 @@ import { BreakoutRooms } from './breakout-rooms.jsx';
 import { CaptionsOverlay, CaptionsPanel, useManualCaptions } from './meeting-captions.jsx';
 import { RecordingBanner, RecordingPanel, useMeetingRecording } from './meeting-recording.jsx';
 import { hostRolesTopic, placementTopic, useRoomPlacement } from './room-placement.js';
+import { ScreenPresentation } from './share-annotations.jsx';
 
 const videoOptions = { adaptiveStream: true, dynacast: true, stopLocalTrackOnUnpublish: true };
 const messageTopic = 'meetrix.meeting';
@@ -46,7 +47,12 @@ export function Conference({ session, api, prefs, updatePrefs, onLeave }) {
     <p role="status">You are disconnected from this room.</p>
     <button className="button" onClick={onLeave}>Return to workspace</button>
   </main>;
-  return <ConferenceConnection key={placement.session.roomId} session={placement.session} api={api}
+  if (placement.waiting) return <main className="boot"><Logo />
+    <h1>Waiting room</h1>
+    <p role="status">The host moved you to the waiting room.</p>
+    <button className="button" onClick={onLeave}>Leave meeting</button>
+  </main>;
+  return <ConferenceConnection key={placement.session.roomId + ':' + (placement.session.placementEpoch ?? 0)} session={placement.session} api={api}
     prefs={prefs} updatePrefs={updatePrefs} onLeave={onLeave} roles={placement.roles}
     updateRoles={placement.updateRoles} refreshPlacement={placement.refreshPlacement} />;
 }
@@ -150,7 +156,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, role
   const coHost = online && !host && meetingTools && !session.accountless && isCoHost(localParticipant);
   const canModerate = host || coHost;
   const canManageBreakouts = meetingTools && canModerate;
-  const captions = useManualCaptions(room, { enabled: meetingTools, hostIdentity });
+  const captions = useManualCaptions(room, { enabled: meetingTools, hostIdentity, hostVersion });
   const recording = useMeetingRecording(room, { enabled: meetingTools, hostIdentity, host, meetingId: id });
 
   async function run(operation) {
@@ -313,6 +319,12 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, role
       if (command.action === 'mute-all') setToast('Attendee microphones muted.');
       if (command.action === 'ask-unmute') setToast('Microphone request sent.');
     });
+  }
+
+  async function moveToWaitingRoom(participant) {
+    const name = participant.name || 'this participant';
+    if (!window.confirm('Move ' + name + ' to the waiting room?')) return false;
+    return moderate({ action: 'wait', identity: participant.identity });
   }
 
   async function transferHost(participant) {
@@ -504,7 +516,8 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, role
       {reaction && <div className="reaction-toast" role="status"><span>{reaction.emoji}</span> {reaction.from}</div>}
       <div className="stage-wrap"><section className={stageClass} aria-label="Meeting stage">
         {!online && !participants.length ? <div className="empty"><Video size={28} /><strong>{ended ? 'Meeting connection closed' : 'Connecting to the room'}</strong></div> : null}
-        {activeShare && <div className="share"><VideoTrack trackRef={activeShare} /><span>{activeShare.participant.name || 'Guest'} is sharing{anyShareAudio && ' with sound'}</span></div>}
+        {activeShare && <ScreenPresentation key={activeShare.publication.trackSid} room={room}
+          share={activeShare} withSound={anyShareAudio} online={online} />}
         {online && !display.length && !activeShare && <div className="empty"><VideoOff size={28} /><strong>There are no visible participant tiles.</strong></div>}
         <div className="tile-grid" style={{ '--tiles': Math.min(3, Math.max(1, display.length)) }}>
           {display.map(participant => <Tile key={participant.identity} participant={participant}
@@ -518,7 +531,16 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, role
             <button className="button" onClick={() => moderate({ action: 'lock', locked: !locked })}>{locked ? <Lock size={16} /> : <LockOpen size={16} />}{locked ? 'Unlock room' : 'Lock room'}</button>
             <button className="button" disabled={!online} onClick={() => moderate({ action: 'mute-all' })}><MicOff size={16} /> Mute attendees</button>
           </div>}
-          {canModerate && guests.length > 0 && <div className="waiting-list"><h3>Waiting room · {guests.length}</h3>{guests.map(guest => <div className="waiting-person" key={guest.identity}><strong>{guest.name}{guest.accountless && <small>Unverified guest</small>}</strong><div><button className="button primary small" onClick={() => moderate({ action: 'decide', identity: guest.identity, admit: true })}>Admit</button><button className="button small" onClick={() => moderate({ action: 'decide', identity: guest.identity, admit: false })}>Decline</button></div></div>)}</div>}
+          {canModerate && guests.length > 0 && <div className="waiting-list">
+            <h3>Waiting room · {guests.length}</h3>
+            {guests.map(guest => <div className="waiting-person" key={guest.identity}>
+              <strong>{guest.name}{guest.accountless && <small>Unverified guest</small>}</strong>
+              {guest.evicting ? <div><span role="status">Disconnecting…</span>
+                <button className="button small" onClick={() => moderate({ action: 'wait', identity: guest.identity })}>Retry</button></div>
+                : <div><button className="button primary small" onClick={() => moderate({ action: 'decide', identity: guest.identity, admit: true })}>Admit</button>
+                  <button className="button small" onClick={() => moderate({ action: 'decide', identity: guest.identity, admit: false })}>Decline</button></div>}
+            </div>)}
+          </div>}
           <div className="people-list">{participants.map(participant => <div className="person" key={participant.identity}><span className="person-avatar">{initials(participant.name || 'Guest')}</span>
             <div><strong>{participant.name || 'Guest'}{participant.isLocal && ' (you)'}</strong>{roleOf(participant) && <small>{roleOf(participant)}</small>}{participant.identity.startsWith('guest_') && <small>Unverified guest</small>}</div>
             {hands[participant.identity] && <Hand size={16} />}
@@ -541,6 +563,9 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, role
                 : <button className="icon-button" title="Ask to unmute" aria-label={'Ask ' + participant.name + ' to unmute'} onClick={() => moderate({ action: 'ask-unmute', identity: participant.identity })}><Mic size={17} /></button>}
               {participant.isCameraEnabled && <button className="icon-button" title="Stop camera" aria-label={'Stop camera for ' + participant.name}
                 onClick={() => moderate({ action: 'stop-video', identity: participant.identity })}><VideoOff size={17} /></button>}
+              {meetingTools && <button className="icon-button" title="Move to waiting room"
+                aria-label={'Move ' + (participant.name || 'Guest') + ' to waiting room'}
+                onClick={() => moveToWaitingRoom(participant)}><Hourglass size={17} /></button>}
               <button className="icon-button" title="Remove participant" aria-label={'Remove ' + participant.name} onClick={() => {
                 if (window.confirm('Remove this participant and block them from rejoining?')) moderate({ action: 'remove', identity: participant.identity });
               }}><UserMinus size={17} /></button>
@@ -559,6 +584,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, role
         {panel === 'captions' && <CaptionsPanel captions={captions} host={host} online={online} meetingId={id} />}
         {panel === 'recording' && host && <RecordingPanel recording={recording} participants={participants} online={online} />}
         {panel === 'breakouts' && canManageBreakouts && <BreakoutRooms api={api} meetingId={id} participants={participants.filter(participant => !roleOf(participant))}
+          moveToWaitingRoom={moveToWaitingRoom}
           removeParticipant={identity => moderate({ action: 'remove', identity })} />}
       </aside>}
     </div>

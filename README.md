@@ -33,19 +33,21 @@ Meetrix keys account ownership by the InsForge project and user ID. Earlier Cler
 
 ## Meeting features
 
-- Instant and recurring meetings, links and meeting codes, plus iCalendar invitations.
+- Schedule one-time, daily, weekday, weekly, or monthly meetings. Preview the dates before saving, then download a single occurrence or the whole new series as an iCalendar file for Google Calendar, Outlook, or Apple Calendar.
 - Audio, video, gallery and speaker views, screen sharing, chat, and reactions.
 - Microphone, camera, and speaker selection before joining or from **Devices** during a call. Browser support determines speaker availability.
 - **Settings** includes a live microphone meter, a speaker test tone, noise reduction, camera preview and mirroring, and saved defaults for joining a call. Preview and diagnostic media stays on your device.
 - Use **Camera background** in Video settings, the pre-join setup, or a meeting’s **Devices** dialog. Choose blur or a JPEG, PNG, or WebP image from your device. The app saves your selection on this device. The bundled model applies the effect locally before Meetrix publishes your camera.
 - Appearance, in-app shortcut assignments, chat accessibility, and presentation preferences are saved on your device. From a call, **View preferences** can pause incoming cameras while preserving audio and presentations. **Call statistics** displays sampled WebRTC media measurements.
 - Host moderation, passcodes, room locks, waiting rooms, and participant removal.
+- In standard meetings, hosts and co-hosts can move an attendee back to the waiting room from **People** or **Breakouts**. Readmitted attendees return to the main room with their camera and microphone off.
 - In standard meetings, open **People** and select **Transfer host** on a connected, signed-in attendee. The meeting continues under the new host, and the original organizer can stay or leave.
 - Turn on **Include sound** in the **Share** dialog to send sound with a display. The Windows app captures system audio with an explicitly selected display. A browser’s source picker determines which other sources provide audio.
+- Presenters can use **Annotate** to draw over a shared screen, let attendees draw, and clear the marks. A presentation’s annotations stay in its LiveKit room and end with that share.
 - In a standard meeting, hosts can open **People** and make a connected, signed-in attendee a co-host. Co-hosts can manage the waiting room, lock the room, moderate attendees, and manage breakouts. Hosts can revoke co-host access from the same panel. **Mute attendees** mutes active attendee microphones in the main room. Moderators can stop an attendee’s camera or ask an attendee to turn on their microphone. The attendee chooses whether to unmute.
 - Hosts can allow invitees without accounts. The waiting room still applies, and the host sees those invitees labeled as unverified guests.
 - In standard meetings, hosts and co-hosts can use **Breakouts** to name up to eight rooms, assign connected attendees manually or evenly, and send text announcements. **Close all rooms** returns attendees to the main meeting. Hosts and co-hosts stay in the main room. Automatic moves start with the microphone and camera off.
-- In the main room of a standard meeting, open **Captions** to read captions typed by the host, show or hide them over the stage, or save the caption history received on this device as a text file.
+- In the main room of a standard meeting, open **Captions** to read live captions, show or hide them over the stage, and save the caption history on this device. Hosts can type captions themselves or assign a connected attendee to type them.
 - Hosts can open **Record**, request permission from everyone in the main room, and start once every connected participant agrees. Meetrix records available meeting audio and the shared screen or up to nine camera tiles. The recording stops if the participant list changes or someone withdraws consent. Use **Save WebM** to keep the file. Recordings stay on the host device and are capped at 30 minutes or approximately 180 MiB per file.
 - Shared notes, polls, and whiteboards. Encrypted rooms use a shared, client-generated key for LiveKit media and in-room data.
 

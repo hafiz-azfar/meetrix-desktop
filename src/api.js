@@ -1,3 +1,7 @@
+import { meetingCalendar } from './calendar.js';
+
+export { invitation } from './calendar.js';
+
 export function apiFor() {
   return async (path, options = {}) => {
     const response = await fetch('/api' + path, {
@@ -12,12 +16,6 @@ export function apiFor() {
     if (!response.ok) throw Object.assign(new Error(payload.error || 'The request did not complete.'), { status: response.status });
     return payload;
   };
-}
-
-export function invitation(meetingId) {
-  const url = new URL('/join', location.origin);
-  url.searchParams.set('m', meetingId);
-  return url.href;
 }
 
 export function parseInvitation(input) {
@@ -43,13 +41,9 @@ export function download(name, contents, type) {
 }
 
 export function calendarInvite(meeting) {
-  const escape = text => text.replace(/\\/g, '\\\\').replace(/\r?\n|\r/g, '\\n').replace(/[,;]/g, '\\$&');
-  const stamp = time => new Date(time).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
-  download('meetrix-' + meeting.id + '.ics', [
-    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Meetrix//Meetings//EN', 'BEGIN:VEVENT',
-    'UID:' + meeting.id + '@' + location.hostname, 'DTSTAMP:' + stamp(Date.now()),
-    'DTSTART:' + stamp(meeting.startAt), 'DTEND:' + stamp(meeting.startAt + meeting.duration * 60000),
-    'SUMMARY:' + escape(meeting.title), 'URL:' + invitation(meeting.id),
-    'END:VEVENT', 'END:VCALENDAR', '',
-  ].join('\r\n'), 'text/calendar');
+  download('meetrix-' + meeting.id + '.ics', meetingCalendar([meeting], location.origin), 'text/calendar;charset=utf-8');
+}
+
+export function calendarSeries(meetings) {
+  download('meetrix-series.ics', meetingCalendar(meetings, location.origin), 'text/calendar;charset=utf-8');
 }

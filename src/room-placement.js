@@ -9,6 +9,7 @@ export function useRoomPlacement(api, initial) {
     hostIdentity: initial.hostIdentity, hostVersion: initial.hostVersion ?? 0, coHosts: initial.coHosts ?? [],
   }));
   const [ended, setEnded] = useState(false);
+  const [waiting, setWaiting] = useState(false);
   const hint = useRef(null);
   const refreshPlacement = useCallback(() => hint.current?.(), []);
   const updateRoles = useCallback(snapshot => {
@@ -19,7 +20,7 @@ export function useRoomPlacement(api, initial) {
       hostIdentity, hostVersion, coHosts: Array.isArray(coHosts) ? coHosts : previous.coHosts,
     });
   }, []);
-  const { routingKey, roomId, meeting } = session;
+  const { routingKey, roomId, meeting, placementEpoch = 0 } = session;
 
   useEffect(() => {
     if (!routingKey || ended) return;
@@ -36,17 +37,26 @@ export function useRoomPlacement(api, initial) {
       let keepChecking = true;
       try {
         const next = await api('/meetings/' + meeting.id + '/placement', {
-          method: 'POST', body: { key: routingKey, roomId }, signal: controller.signal,
+          method: 'POST', body: { key: routingKey, roomId, placementEpoch }, signal: controller.signal,
         });
-        if (!controller.signal.aborted) updateRoles(next);
-        if (!controller.signal.aborted && next.token && next.roomId !== roomId) {
+        if (controller.signal.aborted) return;
+        if (next.waiting) {
+          setWaiting(true);
+          return;
+        }
+        updateRoles(next);
+        const readmission = next.placementEpoch > placementEpoch;
+        if (next.token && (next.roomId !== roomId || readmission)) {
           keepChecking = false;
           setSession(current => ({
             ...current, ...next, media: { camera: false, microphone: false },
             roomNotice: next.breakoutName
               ? 'Moved to ' + next.breakoutName + '. Your microphone and camera are off.'
-              : 'Returned to the main meeting. Your microphone and camera are off.',
+              : readmission
+                ? 'Readmitted to the meeting. Your microphone and camera are off.'
+                : 'Returned to the main meeting. Your microphone and camera are off.',
           }));
+          setWaiting(false);
         }
       } catch (failure) {
         if (!controller.signal.aborted && [401, 403, 410].includes(failure.status)) {
@@ -55,7 +65,7 @@ export function useRoomPlacement(api, initial) {
         }
       } finally {
         pending = false;
-        if (!controller.signal.aborted && keepChecking) schedule(expedite ? 80 : 11000 + Math.random() * 2000);
+        if (!controller.signal.aborted && keepChecking) schedule(expedite ? 80 : (waiting ? 3000 : 11000) + Math.random() * 2000);
         expedite = false;
       }
     }
@@ -66,7 +76,7 @@ export function useRoomPlacement(api, initial) {
       controller.abort();
       clearTimeout(timer);
     };
-  }, [api, roomId, routingKey, meeting.id, ended, updateRoles]);
+  }, [api, roomId, routingKey, meeting.id, placementEpoch, waiting, ended, updateRoles]);
 
-  return { session, ended, roles, updateRoles, refreshPlacement };
+  return { session, ended, waiting, roles, updateRoles, refreshPlacement };
 }

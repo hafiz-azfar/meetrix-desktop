@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { Plus, Send, Shuffle, UserMinus, X } from 'lucide-react';
+import { Hourglass, Plus, Send, Shuffle, UserMinus, X } from 'lucide-react';
 
-export function BreakoutRooms({ api, meetingId, participants, removeParticipant }) {
+export function BreakoutRooms({ api, meetingId, participants, moveToWaitingRoom, removeParticipant }) {
   const [active, setActive] = useState(null);
   const [names, setNames] = useState(['Room 1', 'Room 2']);
   const [assignments, setAssignments] = useState({});
@@ -44,11 +44,10 @@ export function BreakoutRooms({ api, meetingId, participants, removeParticipant 
     } finally { setPending(false); }
   }
 
-  async function removeGuest(guest) {
-    if (!window.confirm('Remove ' + guest.name + ' from the meeting?')) return;
+  async function updateGuest(guest, action) {
     setPending(true);
     try {
-      if (await removeParticipant(guest.identity)) {
+      if (await action(guest)) {
         setActive(previous => previous.map(room => ({
           ...room, members: room.members.filter(member => member.identity !== guest.identity),
         })));
@@ -71,8 +70,12 @@ export function BreakoutRooms({ api, meetingId, participants, removeParticipant 
         {!room.members.length && <p className="muted">No assigned participants</p>}
         {room.members.map(guest => <div className="breakout-guest" key={guest.identity}>
           <span>{guest.name}</span>
+          <button className="icon-button" disabled={pending} aria-label={'Move ' + guest.name + ' to waiting room'}
+            title="Move to waiting room" onClick={() => updateGuest(guest, moveToWaitingRoom)}><Hourglass size={16} /></button>
           <button className="icon-button" disabled={pending} aria-label={'Remove ' + guest.name + ' from meeting'}
-            title="Remove from meeting" onClick={() => removeGuest(guest)}><UserMinus size={16} /></button>
+            title="Remove from meeting" onClick={() => {
+              if (window.confirm('Remove ' + guest.name + ' from the meeting?')) updateGuest(guest, member => removeParticipant(member.identity));
+            }}><UserMinus size={16} /></button>
         </div>)}
       </section>)}
       <form className="form" onSubmit={event => { event.preventDefault(); submit({ action: 'announce', text: announcement }); }}>

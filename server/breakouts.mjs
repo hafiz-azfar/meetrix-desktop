@@ -17,6 +17,7 @@ export function breakoutStore(db) {
   `);
   const insertRoom = db.prepare('INSERT INTO breakout_rooms(id, meeting, name, position) VALUES(?, ?, ?, ?)');
   const insertMember = db.prepare('INSERT INTO breakout_members(room, identity) VALUES(?, ?)');
+  const removeMember = db.prepare('DELETE FROM breakout_members WHERE identity = ? AND room IN (SELECT id FROM breakout_rooms WHERE meeting = ?)');
   const closeRooms = db.prepare('UPDATE breakout_rooms SET closed_at = ? WHERE meeting = ? AND closed_at IS NULL');
   const pending = db.prepare('SELECT id FROM breakout_rooms WHERE meeting = ? AND closed_at IS NOT NULL AND cleaned_at IS NULL');
   const pendingMeetings = db.prepare('SELECT DISTINCT meeting FROM breakout_rooms WHERE closed_at IS NOT NULL AND cleaned_at IS NULL LIMIT 50');
@@ -39,6 +40,7 @@ export function breakoutStore(db) {
     },
     assigned(meeting, identity) { return assigned.get(meeting, identity); },
     assignedUncleaned(meeting, identity) { return assignedUncleaned.all(meeting, identity); },
+    removeMember(meeting, identity) { removeMember.run(identity, meeting); },
     open(meeting, plan) {
       db.exec('BEGIN IMMEDIATE');
       try {

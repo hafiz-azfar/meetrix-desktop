@@ -4,7 +4,8 @@ import {
   Clipboard, Clock3, DoorOpen, Ellipsis, FileText, House, LockKeyhole, Mic, Plus, Settings,
   Video, X,
 } from 'lucide-react';
-import { apiFor, calendarInvite, invitation, parseInvitation } from './api.js';
+import { apiFor, calendarInvite, calendarSeries, invitation, parseInvitation } from './api.js';
+import { maxOccurrences, meetingOccurrences } from './meeting-schedule.js';
 import { generateRoomKey, validRoomKey } from './encryption.js';
 import { Logo, Dialog } from './ui.jsx';
 import { Notes } from './notes.jsx';
@@ -25,6 +26,9 @@ const meetingActions = [
 ];
 const dateLabel = new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
 const timeLabel = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+const occurrenceLabel = new Intl.DateTimeFormat(undefined, {
+  weekday: 'short', year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+});
 const inviteCode = new URLSearchParams(location.search).get('m');
 
 function localDateValue(time) {
@@ -35,6 +39,18 @@ function localDateValue(time) {
 function MeetingForm({ mode, meeting, api, name, close, onCreated }) {
   const [working, setWorking] = useState(false);
   const [error, setError] = useState('');
+  const [when, setWhen] = useState(() => meeting ? localDateValue(meeting.startAt) : '');
+  const [repeat, setRepeat] = useState('once');
+  const [count, setCount] = useState('4');
+  const recurring = mode === 'schedule' && repeat !== 'once';
+  let upcoming = [];
+  let scheduleError = '';
+  if (recurring && when) {
+    try { upcoming = meetingOccurrences(when, repeat, Number(count)); }
+    catch (failure) { scheduleError = failure.message; }
+  }
+  const clockAdjusted = upcoming.some(time => localDateValue(time).slice(11) !== when.slice(11));
+
   async function submit(event) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -43,19 +59,15 @@ function MeetingForm({ mode, meeting, api, name, close, onCreated }) {
     try {
       const scheduled = mode !== 'start';
       const details = { title: form.get('title'), duration: Number(form.get('duration') || 60) };
-      if (scheduled) details.startAt = new Date(form.get('when')).toISOString();
+      const times = scheduled ? meetingOccurrences(when, repeat, Number(count)).map(time => time.toISOString()) : [];
+      if (scheduled) details.startAt = times[0];
       if (mode === 'edit') {
+        if (when === localDateValue(meeting.startAt)) details.startAt = new Date(meeting.startAt).toISOString();
         onCreated(await api('/meetings/' + meeting.id, { method: 'PATCH', body: details }), true);
         return;
       }
-      const additionalStarts = [];
-      for (let week = 1; week < Number(form.get('repeats') || 1); week++) {
-        const occurrence = new Date(form.get('when'));
-        occurrence.setDate(occurrence.getDate() + week * 7);
-        additionalStarts.push(occurrence.toISOString());
-      }
       const created = await api('/meetings', { method: 'POST', body: {
-        ...details, name, additionalStarts, lobby: form.get('lobby') === 'on', allowGuests: form.get('allowGuests') === 'on',
+        ...details, name, additionalStarts: times.slice(1), lobby: form.get('lobby') === 'on', allowGuests: form.get('allowGuests') === 'on',
         encrypted: form.get('encrypted') === 'on',
         ...(form.get('passcode') ? { passcode: form.get('passcode') } : {}),
       } });
@@ -67,16 +79,28 @@ function MeetingForm({ mode, meeting, api, name, close, onCreated }) {
     <form className="form" onSubmit={submit}>
       <label>Meeting name<input name="title" required autoFocus maxLength={100} defaultValue={meeting?.title} placeholder="Project check-in" /></label>
       {mode !== 'start' && <>
-        <label>Start time ({Intl.DateTimeFormat().resolvedOptions().timeZone}) <input type="datetime-local" name="when" defaultValue={meeting ? localDateValue(meeting.startAt) : ''} required /></label>
+        <label>Start time ({Intl.DateTimeFormat().resolvedOptions().timeZone}) <input type="datetime-local" name="when" value={when} onChange={event => setWhen(event.target.value)} required /></label>
         <label>Calendar duration<select name="duration" defaultValue={meeting?.duration || 60}>{[15, 30, 45, 60, 90, 120, 180, 1800].map(minutes => <option key={minutes} value={minutes}>{minutes < 120 ? minutes + ' minutes' : minutes / 60 + ' hours'}</option>)}</select></label>
       </>}
-      {mode === 'schedule' && <label>Repeat<select name="repeats"><option value="1">One time</option><option value="4">Weekly, 4 occurrences</option><option value="8">Weekly, 8 occurrences</option><option value="12">Weekly, 12 occurrences</option></select></label>}
+      {mode === 'schedule' && <label>Repeat<select aria-label="Repeat" value={repeat} onChange={event => setRepeat(event.target.value)}>
+        <option value="once">One time</option><option value="daily">Daily</option><option value="weekdays">Weekdays</option>
+        <option value="weekly">Weekly</option><option value="monthly">Monthly</option>
+      </select></label>}
+      {recurring && <>
+        <label>Number of occurrences<input type="number" value={count} onChange={event => setCount(event.target.value)}
+          min="2" max={maxOccurrences} required /></label>
+        {!!upcoming.length && <details><summary>Preview {upcoming.length} meeting times</summary>
+          <ol>{upcoming.map(time => <li key={time.toISOString()}>{occurrenceLabel.format(time)}</li>)}</ol>
+        </details>}
+        {repeat === 'monthly' && Number(when.slice(8, 10)) > 28 && <p className="muted">Shorter months use their last day.</p>}
+        {clockAdjusted && <p className="muted">A clock change moves one or more start times. Check the preview.</p>}
+      </>}
       {mode !== 'edit' && <><label><span>Passcode <span className="muted">(optional)</span></span><input name="passcode" type="password" autoComplete="new-password" minLength={8} maxLength={128} placeholder="At least 8 characters" /></label>
       <label className="check"><input type="checkbox" name="lobby" defaultChecked /><span><strong>Waiting room</strong><small>Admit each guest before they join.</small></span></label>
       <label className="check"><input type="checkbox" name="allowGuests" /><span><strong>Allow guests without an account</strong><small>The waiting room must be enabled.</small></span></label>
       <label className="check"><input type="checkbox" name="encrypted" /><span><strong>End-to-end encrypted room</strong><small>Share a separate room key with guests. Server-stored collaboration is disabled.</small></span></label></>}
-      {error && <p className="error" role="alert">{error}</p>}
-      <div className="dialog-actions"><button className="button" type="button" onClick={close}>Cancel</button><button className="button primary" disabled={working}>{working ? 'Saving…' : mode === 'edit' ? 'Save changes' : mode === 'schedule' ? 'Schedule' : 'Continue'}</button></div>
+      {(error || scheduleError) && <p className="error" role="alert">{error || scheduleError}</p>}
+      <div className="dialog-actions"><button className="button" type="button" onClick={close}>Cancel</button><button className="button primary" disabled={working || Boolean(scheduleError)}>{working ? 'Saving…' : mode === 'edit' ? 'Save changes' : mode === 'schedule' ? 'Schedule' : 'Continue'}</button></div>
     </form>
   </Dialog>;
 }
@@ -191,12 +215,13 @@ export function Workspace({ config, user, accountControl, prefs, updatePrefs }) 
   const [filter, setFilter] = useState('upcoming');
   const [meetings, setMeetings] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [notice, setNotice] = useState('');
+  const [notice, updateNotice] = useState(null);
   const [modal, setModal] = useState(inviteCode ? 'join' : '');
   const [target, setTarget] = useState(null);
   const [editing, setEditing] = useState(null);
   const [archived, setArchived] = useState(null);
   const [session, setSession] = useState(null);
+  function setNotice(message, calendar = []) { updateNotice(message ? { message, calendar } : null); }
   function refresh() {
     setLoading(true);
     api('/meetings').then(setMeetings).catch(error => setNotice(error.message)).finally(() => setLoading(false));
@@ -208,7 +233,8 @@ export function Workspace({ config, user, accountControl, prefs, updatePrefs }) 
     refresh();
     if (scheduled) {
       setPage('meetings'); setFilter('upcoming');
-      setNotice(meeting.scheduledCount > 1 ? meeting.scheduledCount + ' weekly meetings scheduled.' : 'Meeting saved. Copy its invite to share.');
+      if (meeting.scheduledCount > 1) setNotice(meeting.scheduledCount + ' meetings scheduled.', meeting.scheduledMeetings);
+      else setNotice('Meeting saved. Copy its invite to share.');
     }
     else enter(meeting);
   }
@@ -247,7 +273,11 @@ export function Workspace({ config, user, accountControl, prefs, updatePrefs }) 
         </div>
       </header>
       <div className="main-content">
-        {notice && <div className="notice" role="status"><span>{notice}</span><button className="icon-button" aria-label="Dismiss" onClick={() => setNotice('')}><X size={16} /></button></div>}
+        {notice && <div className="notice"><span role="status">{notice.message}</span>
+          {notice.calendar.length > 1 && <button className="button small" onClick={() => calendarSeries(notice.calendar)}>
+            <ArrowDownToLine size={16} /> Download series calendar
+          </button>}
+          <button className="icon-button" aria-label="Dismiss" onClick={() => setNotice('')}><X size={16} /></button></div>}
         {page === 'home' && <>
           <div className="page-head home-heading">
             <h1>{user?.firstName ? 'Welcome, ' + user.firstName : 'Home'}</h1>

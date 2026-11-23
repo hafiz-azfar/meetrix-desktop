@@ -20,6 +20,33 @@ async function waitForCameraColor(page, selector, color) {
     return color === 'pink' ? red > 160 && blue > 100 && green < 100 : green > 110 && red < 115;
   }, { selector, color });
 }
+
+async function drawOnShare(page, y) {
+  await page.getByRole('button', { name: 'Annotate', exact: true }).click();
+  const canvas = page.getByLabel('Presentation annotation canvas');
+  await page.locator('.share-ink[data-drawing="true"]').waitFor();
+  const box = await canvas.boundingBox();
+  assert.ok(box && box.width > 0 && box.height > 0);
+  await page.mouse.move(box.x + box.width * 0.25, box.y + box.height * y);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.65, box.y + box.height * y, { steps: 12 });
+  await page.mouse.up();
+}
+
+async function waitForInk(page, count) {
+  await page.waitForFunction(expected => {
+    const canvas = document.querySelector('.share-ink');
+    if (!canvas) return false;
+    const { width, height } = canvas;
+    const paint = canvas.getContext('2d');
+    const data = paint.getImageData(0, 0, width, height).data;
+    let pixels = 0;
+    for (let index = 3; index < data.length; index += 4) {
+      if (data[index] > 128) pixels++;
+    }
+    return expected ? pixels >= expected : pixels === 0;
+  }, count);
+}
 let backend;
 let browser;
 try {
@@ -77,6 +104,19 @@ try {
   await host.getByText('Weekly team check-in', { exact: true }).waitFor();
   await host.getByRole('button', { name: 'Home', exact: true }).click();
   await host.getByText('Weekly team check-in', { exact: true }).waitFor();
+  await host.getByRole('button', { name: 'Schedule meeting', exact: true }).click();
+  await host.getByLabel('Meeting name').fill('Planning series');
+  await host.getByLabel('Start time').fill(localTime);
+  await host.getByLabel('Repeat', { exact: true }).selectOption('monthly');
+  await host.getByLabel('Number of occurrences').fill('3');
+  await host.getByRole('dialog').getByRole('button', { name: 'Schedule', exact: true }).click();
+  const calendarDownload = host.waitForEvent('download');
+  await host.getByRole('button', { name: 'Download series calendar', exact: true }).click();
+  const calendar = await calendarDownload;
+  assert.match(calendar.suggestedFilename(), /\.ics$/);
+  const schedule = await readFile(await calendar.path(), 'utf8');
+  assert.equal([...schedule.matchAll(/BEGIN:VEVENT/g)].length, 3);
+  await host.getByRole('button', { name: 'Home', exact: true }).click();
   await host.screenshot({ path: resolve(results, 'meetrix-home.png') });
   await host.getByRole('button', { name: 'Settings', exact: true }).click();
   await host.getByRole('heading', { name: 'Audio', exact: true }).waitFor();
@@ -235,6 +275,19 @@ try {
   assert.equal(await host.evaluate(() => window.testShareOptions.audio.restrictOwnAudio), true);
   await guest.getByText('Alex Morgan is sharing with sound', { exact: true }).waitFor();
   await guest.locator('.stat-sample').filter({ hasText: 'Shared audio' }).getByText(/[1-9]\d* kb\/s/).waitFor();
+  assert.equal(await guest.getByRole('button', { name: 'Annotate', exact: true }).count(), 0);
+  await drawOnShare(host, 0.43);
+  await waitForInk(guest, 30);
+  await host.getByRole('button', { name: 'Allow attendee drawing', exact: true }).click();
+  await guest.getByRole('button', { name: 'Annotate', exact: true }).waitFor();
+  await host.getByRole('button', { name: 'Clear annotations', exact: true }).click();
+  await waitForInk(guest, 0);
+  await drawOnShare(guest, 0.64);
+  await waitForInk(host, 30);
+  await host.getByRole('button', { name: 'Allow attendee drawing', exact: true }).click();
+  await guest.getByRole('button', { name: 'Annotate', exact: true }).waitFor({ state: 'detached' });
+  await host.getByRole('button', { name: 'Clear annotations', exact: true }).click();
+  await waitForInk(guest, 0);
 
   await guest.getByRole('button', { name: 'View preferences' }).click();
   await guest.getByLabel('Pause incoming cameras').check();
@@ -414,6 +467,21 @@ try {
   await guest.getByText('Breakout · Peer review', { exact: true }).waitFor();
   await delegate.getByRole('button', { name: 'Close all rooms' }).click();
   await guest.getByText('Returned to the main meeting. Your microphone and camera are off.', { exact: true }).waitFor();
+  await guest.getByRole('button', { name: 'Unmute', exact: true }).click();
+  await guest.getByRole('button', { name: 'Mute', exact: true }).waitFor();
+  await guest.getByRole('button', { name: 'Camera', exact: true }).click();
+  await guest.locator('button[aria-pressed="true"]').filter({ hasText: /^Camera$/ }).waitFor();
+  await delegate.getByRole('button', { name: 'People 4', exact: true }).click();
+  assert.equal(await delegate.getByRole('button', { name: 'Move Alex Morgan to waiting room' }).count(), 0);
+  delegate.once('dialog', dialog => dialog.accept());
+  await delegate.getByRole('button', { name: 'Move Test guest to waiting room', exact: true }).click();
+  await guest.getByRole('heading', { name: 'Waiting room', exact: true }).waitFor();
+  await guest.getByText('The host moved you to the waiting room.', { exact: true }).waitFor();
+  assert.equal(await guest.getByRole('button', { name: 'Camera', exact: true }).count(), 0);
+  await delegate.locator('.waiting-person').filter({ hasText: 'Test guest' }).getByRole('button', { name: 'Admit', exact: true }).click();
+  await guest.getByText('Readmitted to the meeting. Your microphone and camera are off.', { exact: true }).waitFor();
+  await guest.getByRole('button', { name: 'Unmute', exact: true }).waitFor();
+  assert.equal(await guest.getByRole('button', { name: 'Camera', exact: true }).getAttribute('aria-pressed'), 'false');
   await host.getByRole('button', { name: 'Revoke co-host access for Design partner', exact: true }).click();
   await roleStatus.waitFor({ state: 'detached' });
   await delegate.getByRole('button', { name: 'Breakouts', exact: true }).waitFor({ state: 'detached' });
@@ -421,6 +489,18 @@ try {
     headers: { Origin: origin }, data: { action: 'lock', locked: true },
   })).status(), 403);
 
+  await host.getByRole('button', { name: 'Captions', exact: true }).click();
+  const typist = host.getByRole('combobox', { name: 'Caption typist' });
+  await typist.selectOption({ label: 'Design partner' });
+  await delegate.getByRole('button', { name: 'Captions', exact: true }).click();
+  await delegate.getByText('You can type captions for this meeting.', { exact: true }).waitFor();
+  await delegate.getByRole('textbox', { name: 'Caption text' }).fill('The caption delegate is ready.');
+  await delegate.getByRole('button', { name: 'Send caption' }).click();
+  await guest.locator('.caption-overlay').getByText('The caption delegate is ready.', { exact: true }).waitFor();
+  await typist.selectOption({ label: 'Host only' });
+  await delegate.getByRole('textbox', { name: 'Caption text' }).waitFor({ state: 'detached' });
+  await delegate.getByRole('button', { name: 'Close panel' }).click();
+  await host.getByRole('button', { name: 'People 4', exact: true }).click();
   host.once('dialog', dialog => dialog.accept());
   await host.getByRole('button', { name: 'Transfer host to Design partner', exact: true }).click();
   await delegate.getByText('You’re the host', { exact: true }).waitFor();
@@ -438,7 +518,7 @@ try {
   await delegate.getByRole('button', { name: 'Leave', exact: true }).click();
   await delegate.getByRole('button', { name: 'End for everyone' }).click();
   await guest.getByText('You are disconnected from this room.').waitFor();
-  console.log('Four-client meeting checks passed, including screen-share audio, host transfer, backgrounds, breakouts, captions, recording, and co-hosts.');
+  console.log('Four-client meeting checks passed, including recurring calendar export, shared annotations, waiting room readmission, delegated captions, and prior call workflows.');
 } finally {
   await browser?.close();
   backend?.stop();
