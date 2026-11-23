@@ -16,7 +16,7 @@ F14,Pro,Cloud recording and storage,should,yes,partial,Hosted LiveKit Egress int
 F15,Pro,AI note-taking and summaries,should,yes,no,Requires consent and transcription plus model provider
 F16,Pro,Recurring scheduling and calendar sync,should,yes,partial,Daily weekday weekly and monthly recurrence with date preview and ICS handoff
 F17,Pro,Whiteboard and breakout rooms,should,yes,partial,Whiteboard and manually assigned or self-selected rooms with text announcements
-F18,Pro,Live captions and translation,should,yes,partial,Manual and on-device English automatic captions with text export
+F18,Pro,Live captions and translation,should,yes,partial,Manual and automatic English captions with on-device Hindi and Spanish translation and export
 F19,Workplace,Team chat mail and phone,could,yes,no,
 F20,Workplace,Canvas clips tasks and booking pages,could,yes,no,
 F21,Workplace,Admin console large scale support,could,yes,no,

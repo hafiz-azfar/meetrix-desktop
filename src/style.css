@@ -237,7 +237,9 @@
   .recording-consent li { display: flex; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); }
   .recording-consent li span { min-width: 0; overflow-wrap: anywhere; }
   .recording-consent li strong { flex-shrink: 0; }
-  .captions-panel { grid-template-rows: auto minmax(65px, 1fr); flex: 1; min-height: 0; }
+  .captions-panel { grid-template-rows: auto auto minmax(65px, 1fr); flex: 1; min-height: 0; }
+  .caption-language, .caption-language label { display: grid; gap: 5px; }
+  .caption-history .translated-caption { display: block; color: var(--accent); padding-inline-start: 8px; }
   .caption-toggle, .caption-form { display: flex; align-items: center; gap: 8px; }
   .caption-form input { min-width: 0; flex: 1; }
   .automatic-caption-controls { display: grid; justify-items: start; gap: 8px; border-top: 1px solid var(--line); padding-top: 8px; }

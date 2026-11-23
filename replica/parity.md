@@ -1,4 +1,4 @@
-# Meetrix 0.1.12 feature comparison
+# Meetrix 0.1.13 feature comparison
 
 | Area | Meetrix coverage | Remaining scope |
 |---|---|---|
@@ -8,7 +8,7 @@
 | In-call display and diagnostics | Fullscreen, elapsed-time display, participant filters, local camera pause, presentation layout, and per-track WebRTC samples | Dual-window layouts, richer network diagnostics, configurable push-to-talk, and a diagnostic export |
 | Collaboration | In-room chat, raised hands, reactions, polls, whiteboard, notes, presentation annotations, and assigned or self-selected breakout rooms | Annotation shapes, text and image export, persistent team chat and attachments, and breakout pre-assignment, countdowns, and voice broadcasts |
 | Host controls | Waiting room re-entry and readmission, passcodes, lock, individual and bulk mute, ask to unmute, stop camera, remove, end, revocable co-host access, and explicit host transfer in standard meetings | Automatic host succession, transfer and waiting room re-entry in encrypted meetings, organization-wide policy, and independent security evaluation |
-| Recording and captions | Local WebM, opt-in hosted Egress and private MP4 downloads, manual and offline Windows English captions, and caption history export | Live Egress and storage deployment verification, multilingual recognition, translated captions, and long-form recordings |
+| Recording and captions | Local WebM, opt-in hosted Egress and private MP4 downloads, manual and offline Windows English captions, per-attendee Hindi and Spanish translation, and caption history export | Live Egress and storage deployment verification, multilingual speech recognition, additional translation pairs, and long-form recordings |
 | Pro meeting features | 30-hour room cap, 100-participant configuration, and optional end-to-end encryption | Capacity/load verification and AI notes |
 | Workplace suite | Desktop and web meeting workspaces | Mail, calendar sync, Canvas, Clips, Tasks, and booking pages |
 
@@ -17,3 +17,5 @@
 **Verification scope.** API and protocol tests cover admission, room cleanup, caption delegation, breakout choices, cloud record consent and file authorization. Four browser clients use bundled LiveKit for the collaborative workflows. The Windows speech test processes a real English audio fixture through the offline recognizer. The LiveKit recording template is exercised against real media sessions. Egress jobs and storage requests use fixtures. See [the test plan](test-plan.md) for commands and scope.
 
 **Release status.** Calendar handoff uses an iCalendar file with individual Meetrix invite links. Automatic invite email and calendar synchronization remain open. Workplace-wide coverage, production capacity, and operating controls need additional implementation and verification.
+
+The caption comparison includes per-attendee language selection. [Zoom translated captions](https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0060844)

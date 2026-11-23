@@ -1,0 +1,9 @@
+Meetrix caption translation bundles the Apache-2.0 OPUS-MT English–Hindi and
+English–Spanish models by Helsinki-NLP, converted to ONNX by Xenova.
+
+Original models
+https://huggingface.co/Helsinki-NLP/opus-mt-en-hi
+https://huggingface.co/Helsinki-NLP/opus-mt-en-es
+
+ONNX model revisions and integrity checks are recorded in scripts/stage-translation.mjs.
+Transformers.js and Microsoft ONNX Runtime retain their upstream licenses.

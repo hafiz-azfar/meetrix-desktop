@@ -358,6 +358,20 @@ try {
   assert.equal(await guest.evaluate(() => window.speechTrace.starts), 0);
   await guest.getByRole('button', { name: 'Unmute', exact: true }).click();
   await host.locator('.caption-overlay').getByText('The automatic caption reached the meeting.').waitFor();
+  const language = guest.getByRole('combobox', { name: 'Translate English captions' });
+  const captionHistory = guest.getByRole('region', { name: 'Caption history' });
+  await language.selectOption('hi');
+  await captionHistory.locator('bdi[lang="hi"]').filter({ hasText: /[\u0900-\u097f]/ }).waitFor({ timeout: 70000 });
+  const translatedExport = guest.waitForEvent('download');
+  await guest.getByRole('button', { name: 'Save caption history' }).click();
+  const translatedText = await readFile(await (await translatedExport).path(), 'utf8');
+  assert.match(translatedText, /The automatic caption reached the meeting\./);
+  assert.match(translatedText, /\[Hindi\] .*[\u0900-\u097f]/);
+  await language.selectOption('es');
+  await captionHistory.locator('bdi[lang="es"]').filter({ hasText: /automátic|reunión/i }).waitFor({ timeout: 70000 });
+  assert.equal(await host.locator('.translated-caption').count(), 0);
+  await language.selectOption('original');
+  await captionHistory.locator('.translated-caption').waitFor({ state: 'detached' });
   await guest.getByRole('button', { name: 'Mute', exact: true }).click();
   await guest.waitForFunction(() => window.speechTrace.stops > 0);
   await host.getByRole('button', { name: 'Turn off automatic captions', exact: true }).click();
@@ -565,7 +579,7 @@ try {
   await delegate.getByRole('button', { name: 'Leave', exact: true }).click();
   await delegate.getByRole('button', { name: 'End for everyone' }).click();
   await guest.getByText('You are disconnected from this room.').waitFor();
-  console.log('Four-client meeting checks passed, including automatic captions, self-selected breakouts, annotations, and waiting room readmission.');
+  console.log('Four-client meeting checks passed, including Hindi and Spanish captions, self-selected breakouts, annotations, and waiting room readmission.');
 } finally {
   await browser?.close();
   backend?.stop();

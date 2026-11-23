@@ -19,7 +19,7 @@ npm ci
 npm run dist
 ```
 
-The installer is written to `release/Meetrix-InsForge-Setup-0.1.12-x64.exe`. To preconfigure the installer with a project, copy `.env.example` to `.env`, fill the InsForge settings, and run `npm run dist:local`. If your project requires an anon key, use its public anon key. Installer and executable signing are left to the distributor.
+The installer is written to `release/Meetrix-InsForge-Setup-0.1.13-x64.exe`. To preconfigure the installer with a project, copy `.env.example` to `.env`, fill the InsForge settings, and run `npm run dist:local`. If your project requires an anon key, use its public anon key. Installer and executable signing are left to the distributor. Builds fetch the pinned caption models once and cache them in `vendor/caption-models`.
 
 ## Host a workspace
 
@@ -56,6 +56,7 @@ In a standard, signed-in-only meeting, the host can request cloud recording unde
 - Turn on **Let attendees choose their room** when opening breakouts to let attendees join, switch rooms, and return to the main meeting. Room changes start with the camera and microphone off.
 - In the main room of a standard meeting, open **Captions** to read live captions, show or hide them over the stage, and save the caption history on this device. Hosts can type captions themselves or assign a connected attendee to type them.
 - Hosts can turn on automatic captions in standard meetings. Each speaker who chooses **Caption my microphone** in the Windows x64 app can share English captions. Recognition runs on that device. Other meeting clients can display the text.
+- Under **Captions**, attendees can translate automatic English captions into Hindi or Spanish. The first translated line loads the bundled model. The latest lines appear in the selected language, and caption exports include all available translations alongside the originals.
 - Hosts can open **Record**, request permission from everyone in the main room, and start once every connected participant agrees. Meetrix records available meeting audio and the shared screen or up to nine camera tiles. The recording stops if the participant list changes or someone withdraws consent. Use **Save WebM** to keep the file. Recordings stay on the host device and are capped at 30 minutes or approximately 180 MiB per file.
 - Shared notes, polls, and whiteboards. Encrypted rooms use a shared, client-generated key for LiveKit media and in-room data.
 
@@ -68,6 +69,8 @@ Run `npm test`, `npm run build`, and `npm audit`. The API tests exercise OAuth s
 Run `node test/smoke-windows-share.mjs` with the unpacked Windows build to check the display picker and audio track creation. This test samples track state locally and closes the capture immediately.
 
 Run `node test/smoke-windows-speech.mjs` against the unpacked app to check the offline recognizer with a pinned voice sample. Run `node test/smoke-cloud-recording-template.mjs` to verify approved media subscription and roster-change shutdown with bundled LiveKit. Testing storage authorization uses a fixture. Production verification requires a configured Egress worker and bucket.
+
+Run `node test/smoke-caption-translation.mjs` after building to check that both translation models work with external network requests disabled. Add `--desktop` to check the unpacked app.
 
 ## License
 

@@ -1,15 +1,15 @@
 {
   "name": "meetrix-desktop",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "private": true,
   "description": "Open-source meeting rooms for Windows and the web",
   "main": "desktop/main.cjs",
   "type": "module",
   "license": "MIT",
   "scripts": {
-    "dev": "node --env-file-if-exists=.env --watch server/index.mjs --dev",
+    "dev": "node scripts/stage-translation.mjs && node --env-file-if-exists=.env --watch server/index.mjs --dev",
     "start": "node --env-file-if-exists=.env server/index.mjs",
-    "build": "vite build",
+    "build": "node scripts/stage-translation.mjs && vite build",
     "test": "node --test test/*.test.mjs",
     "desktop": "electron .",
     "dist": "npm run stage:runtime && npm run build && electron-builder --win nsis --x64 --publish never",
@@ -71,6 +71,7 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
+    "@huggingface/transformers": "3.8.1",
     "@mediapipe/tasks-vision": "0.10.14",
     "@vitejs/plugin-react": "6.3.0",
     "electron": "45.4.1",
@@ -80,6 +81,7 @@
   },
   "author": "Meetrix contributors",
   "overrides": {
+    "@huggingface/transformers": { "sharp": "0.35.5" },
     "minimatch@>=7.0.0 <11.0.1": "11.0.1",
     "@insforge/shared-schemas": {
       "zod": "$zod"

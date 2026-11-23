@@ -3,6 +3,7 @@ import { ConnectionState, RoomEvent } from 'livekit-client';
 import { Send } from 'lucide-react';
 import { download } from './api.js';
 import { useAutomaticCaptions } from './automatic-captions.js';
+import { captionLanguages, useCaptionTranslation } from './caption-translation.js';
 import {
   captionLength, isCaptionHost, matchesCaptioner, readCaptionerPacket, readCaptionText, readPublishedCaption,
 } from './caption-protocol.js';
@@ -23,6 +24,7 @@ export function useManualCaptions(room, { enabled, hostIdentity, hostVersion = 0
   const lastCaption = useRef(-Infinity);
   const lastPublish = useRef(-Infinity);
   const automatic = useAutomaticCaptions(room, { enabled, hostIdentity, hostVersion, online, microphone, append });
+  const translation = useCaptionTranslation(entries, enabled);
 
   useEffect(() => {
     if (!current) return;
@@ -178,13 +180,15 @@ export function useManualCaptions(room, { enabled, hostIdentity, hostVersion = 0
   const selected = validAssignment(assignment) ? assignment : null;
   const canType = connected() && (isCaptionHost(hostIdentity, room.localParticipant) ||
     matchesCaptioner(selected, room.localParticipant));
-  return { entries, current, visible, setVisible, send, captioners, selected, canType, assignCaptioner, automatic };
+  return { entries, current, visible, setVisible, send, captioners, selected, canType, assignCaptioner, automatic, translation };
 }
 
 export function CaptionsOverlay({ captions }) {
   if (!captions.visible || !captions.current) return null;
-  const { line, speaker } = captions.current;
-  return <div className="caption-overlay" role="status"><span>{speaker && <strong>{speaker} · </strong>}{line}</span></div>;
+  const { id, line, speaker } = captions.current;
+  const translated = captions.translation.results[id];
+  return <div className="caption-overlay" role="status"><span>{speaker && <strong>{speaker} · </strong>}
+    {translated ? <bdi lang={captions.translation.language}>{translated}</bdi> : line}</span></div>;
 }
 
 const formatTime = value => new Date(value).toLocaleTimeString([], {
@@ -192,7 +196,7 @@ const formatTime = value => new Date(value).toLocaleTimeString([], {
 });
 
 export function CaptionsPanel({ captions, host, online, meetingId }) {
-  const { automatic } = captions;
+  const { automatic, translation } = captions;
   const [draft, setDraft] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
@@ -220,16 +224,27 @@ export function CaptionsPanel({ captions, host, online, meetingId }) {
   }
 
   function save() {
-    const text = captions.entries.map(({ line, speaker, at }) =>
-      formatTime(at) + '  ' + (speaker ? speaker + '  ' : '') + line).join('\n');
+    const text = captions.entries.map(({ id, line, speaker, at }) => {
+      const original = formatTime(at) + '  ' + (speaker ? speaker + '  ' : '') + line;
+      return translation.results[id] ? original + '\n  [' + captionLanguages[translation.language] + '] ' + translation.results[id] : original;
+    }).join('\n');
     download('meetrix-' + meetingId + '-captions.txt', text + '\n', 'text/plain;charset=utf-8');
   }
 
   return <div className="meeting-tool-panel captions-panel">
     <label className="caption-toggle"><input type="checkbox" checked={captions.visible} onChange={event => captions.setVisible(event.target.checked)} /> Show captions on stage</label>
+    <div className="caption-language">
+      <label>Translate English captions
+        <select aria-label="Translate English captions" value={translation.language} onChange={event => translation.choose(event.target.value)}>
+          {Object.entries(captionLanguages).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
+      </label>
+      {translation.status && <p className="muted" role="status">{translation.status}</p>}
+    </div>
     <div className="caption-history" role="region" aria-label="Caption history" tabIndex={0}>
       {captions.entries.length ? <ol>{captions.entries.map(({ line, speaker, at, id }) => <li key={id}>
-        <time dateTime={new Date(at).toISOString()}>{formatTime(at)}</time> {speaker && <strong>{speaker} · </strong>}{line}</li>)}</ol>
+        <time dateTime={new Date(at).toISOString()}>{formatTime(at)}</time> {speaker && <strong>{speaker} · </strong>}{line}
+        {translation.results[id] && <bdi className="translated-caption" lang={translation.language}>{translation.results[id]}</bdi>}</li>)}</ol>
         : <p className="muted">Live meeting captions appear here.</p>}
       <span ref={end} />
     </div>

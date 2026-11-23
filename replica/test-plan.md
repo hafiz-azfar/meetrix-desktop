@@ -50,6 +50,7 @@
 | F14-N1 | The recorder subscribes only to approved media sessions and exits when an unapproved person connects | Cloud recording template smoke test with bundled LiveKit |
 | F17-H4 | An admitted attendee joins and switches self-select rooms, then returns to the main meeting with camera and microphone off | API and four-client LiveKit smoke tests |
 | F18-H3 | Windows audio produces English text offline, and a participant who opts in sends captions through the host | Windows speech smoke and four-client LiveKit smoke tests |
+| F18-H4 | A viewer translates English into Hindi or Spanish and exports the translation with the source caption | Four-client LiveKit smoke test and isolated browser and Windows model checks |
 | F12-P1 | 100-person load, 30-hour duration, and production availability | Deployment-scale verification |
 
 Run `npm test` for the API suite. The RTC tests use two isolated browser pages and a real loopback LiveKit server. The desktop test is aimed at the Windows development build.
