@@ -1,30 +1,36 @@
 import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { ClerkProvider, SignIn, SignUp, UserButton, useAuth, useUser } from '@clerk/react';
 import { ArrowUpRight, CalendarDays, Mic, Video } from 'lucide-react';
 import { ApproveDesktop, DesktopBrowserSignIn, DesktopSignOut, desktopRequest } from './desktop-auth.jsx';
+import { SignInForm } from './insforge-sign-in.jsx';
 import { Workspace } from './workspace.jsx';
 import { Logo } from './ui.jsx';
 import './style.css';
 
-const isElectron = navigator.userAgent.includes('Electron/');
+const isDesktop = Boolean(window.meetrixDesktop);
 const params = new URLSearchParams(location.search);
 const approvalPage = location.pathname === '/desktop-sign-in';
 const requestId = params.get('request');
 const validRequest = /^[A-Za-z0-9_-]{22}$/.test(requestId ?? '');
+const joinCode = /^[A-Za-z0-9_-]{16}$/.test(params.get('m') ?? '') ? params.get('m') : null;
+const continueTo = approvalPage ? '/desktop-sign-in?request=' + encodeURIComponent(requestId)
+  : joinCode ? '/join?m=' + encodeURIComponent(joinCode) : '/';
 
-function Login({ browserSignIn }) {
-  const joinCode = params.get('m');
-  const suffix = joinCode ? '?m=' + encodeURIComponent(joinCode) : '';
-  const pairingPath = '/desktop-sign-in?request=' + encodeURIComponent(requestId);
-  const next = approvalPage ? pairingPath : joinCode ? '/join' + suffix : '/';
-  const signingUp = location.pathname === '/sign-up' || (approvalPage && params.get('mode') === 'signup');
-  const appearance = {
-    elements: isElectron ? { socialButtons: { display: 'none' }, dividerRow: { display: 'none' } } : undefined,
-    variables: { colorPrimary: '#b3f486', colorPrimaryForeground: '#122015', colorBackground: '#192220',
-      colorInputBackground: '#111817', colorInputForeground: '#f4f7f2', colorForeground: '#f4f7f2',
-      colorMutedForeground: '#abbab0', colorBorder: '#364641', borderRadius: '0.65rem' },
-  };
+function Login({ onSignedIn }) {
+  const [methods, setMethods] = useState(null);
+  const [error, setError] = useState('');
+  const [retry, setRetry] = useState(0);
+  useEffect(() => {
+    const control = new AbortController();
+    fetch('/api/auth/methods', { credentials: 'same-origin', cache: 'no-store', signal: control.signal })
+      .then(response => {
+        if (!response.ok) throw new Error('Could not reach the InsForge project.');
+        return response.json();
+      })
+      .then(setMethods)
+      .catch(failure => { if (!control.signal.aborted) setError(failure.message); });
+    return () => control.abort();
+  }, [retry]);
   return <main className="login">
     <section className="login-intro">
       <Logo />
@@ -33,58 +39,40 @@ function Login({ browserSignIn }) {
         <h1>{approvalPage ? 'Sign in to Meetrix for Windows.' : joinCode ? 'Join the conversation.' : 'Make room for a good meeting.'}</h1>
         <div className="login-features"><span><Video size={17} /> Video rooms</span><span><CalendarDays size={17} /> Scheduling</span><span><Mic size={17} /> Screen and audio controls</span></div>
       </div>
-      <div className="login-caption">{isElectron || approvalPage ? 'Meetrix for Windows' : 'Meetrix'} <ArrowUpRight size={15} /></div>
+      <div className="login-caption">{isDesktop || approvalPage ? 'Meetrix for Windows' : 'Meetrix'} <ArrowUpRight size={15} /></div>
     </section>
-    <section className="login-form" aria-label={signingUp ? 'Create an account' : 'Sign in'}>
-      <div className="sign-in-stack">
-        {browserSignIn}
-        {signingUp
-          ? <SignUp routing="hash" signInUrl={approvalPage ? pairingPath : '/sign-in' + suffix} forceRedirectUrl={next} appearance={appearance} />
-          : <SignIn routing="hash" signUpUrl={approvalPage ? pairingPath + '&mode=signup' : '/sign-up' + suffix}
-            forceRedirectUrl={next} appearance={appearance} />}
-      </div>
+    <section className="login-form" aria-label="Sign-in options">
+      {error ? <section className="sign-in-card"><p className="error" role="alert">{error}</p>
+        <button className="button" onClick={() => { setError(''); setRetry(count => count + 1); }}>Try again</button></section>
+      : methods ? isDesktop ? <DesktopBrowserSignIn onSignedIn={onSignedIn} providers={methods.providers} />
+        : <SignInForm methods={methods} continueTo={continueTo} onSignedIn={onSignedIn} />
+      : <p role="status">Loading sign-in methods…</p>}
     </section>
   </main>;
 }
 
-function Access({ config }) {
-  const auth = useAuth();
-  const { user } = useUser();
-  const browserSupported = !approvalPage && config.desktopBrowserSignIn && Boolean(window.meetrixDesktop);
-  const [desktopUser, setDesktopUser] = useState(null);
-  const [checking, setChecking] = useState(browserSupported);
-  useEffect(() => {
-    if (!browserSupported) return;
-    const controller = new AbortController();
-    desktopRequest('/session', { signal: controller.signal }).then(session => {
-      if (!controller.signal.aborted) setDesktopUser(session.user);
-    }).catch(() => {}).finally(() => { if (!controller.signal.aborted) setChecking(false); });
-    return () => controller.abort();
-  }, [browserSupported]);
-
-  if (approvalPage && (!validRequest || isElectron)) return <div className="boot"><Logo /><p>Start social sign-in from Meetrix for Windows.</p></div>;
-  if (desktopUser) return <Workspace config={config} user={desktopUser} accountControl={<DesktopSignOut onSignedOut={setDesktopUser} />} />;
-  if (!auth.isLoaded || checking) return <div className="boot"><Logo /><p>Connecting to Clerk…</p></div>;
-  if (!auth.isSignedIn) return <Login browserSignIn={browserSupported && <DesktopBrowserSignIn onSignedIn={setDesktopUser} />} />;
-  if (approvalPage) return <ApproveDesktop requestId={requestId} getToken={auth.getToken} user={user} />;
-  return <Workspace config={config} getToken={auth.getToken} user={user} accountControl={<UserButton />} />;
-}
-
 function App() {
   const [status, setStatus] = useState({});
+  const [user, setUser] = useState(null);
   useEffect(() => {
-    fetch('/api/config', { credentials: 'omit' })
-      .then(response => { if (!response.ok) throw new Error('Network error'); return response.json(); })
-      .then(config => setStatus({ config }))
-      .catch(() => setStatus({ error: 'Meetrix could not reach its server.' }));
+    const control = new AbortController();
+    Promise.all([
+      fetch('/api/config', { credentials: 'same-origin', signal: control.signal })
+        .then(response => { if (!response.ok) throw new Error(); return response.json(); }),
+      desktopRequest('/session', { signal: control.signal }),
+    ]).then(([config, session]) => {
+      if (!control.signal.aborted) { setUser(session.user); setStatus({ config }); }
+    }).catch(() => { if (!control.signal.aborted) setStatus({ error: 'Meetrix could not reach its server.' }); });
+    return () => control.abort();
   }, []);
+  if (approvalPage && (!validRequest || isDesktop)) return <div className="boot"><Logo /><p>Start sign-in from Meetrix for Windows.</p></div>;
   if (!status.config) {
     return <div className="boot"><Logo /><p role={status.error ? 'alert' : 'status'}>{status.error || 'Opening your workspace…'}</p>
       {status.error && <button className="button" onClick={() => location.reload()}>Try again</button>}</div>;
   }
-  return <ClerkProvider publishableKey={status.config.clerkPublishableKey} afterSignOutUrl="/">
-    <Access config={status.config} />
-  </ClerkProvider>;
+  if (!user) return <Login onSignedIn={isDesktop ? setUser : () => location.replace(continueTo)} />;
+  if (approvalPage) return <ApproveDesktop requestId={requestId} user={user} onSignedOut={setUser} />;
+  return <Workspace config={status.config} user={user} accountControl={<DesktopSignOut onSignedOut={setUser} />} />;
 }
 
 createRoot(document.getElementById('root')).render(<App />);

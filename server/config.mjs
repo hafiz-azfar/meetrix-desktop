@@ -1,5 +1,6 @@
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { insforgeSettings } from './auth.mjs';
 
 export const root = fileURLToPath(new URL('../', import.meta.url));
 
@@ -25,12 +26,12 @@ export function readConfig(env = process.env, overrides = {}) {
   const credentials = [livekit, env.LIVEKIT_API_KEY, env.LIVEKIT_API_SECRET];
   if (credentials.some(Boolean) && !credentials.every(Boolean)) throw new Error('Set all three LiveKit settings.');
   if (env.LIVEKIT_API_SECRET && env.LIVEKIT_API_SECRET.length < 32) throw new Error('LiveKit API secrets must be at least 32 characters.');
-  if (production && (originUrl.protocol !== 'https:' || livekit?.protocol !== 'wss:' || !env.CLERK_PUBLISHABLE_KEY?.startsWith('pk_live_'))) {
-    throw new Error('Production requires HTTPS, WSS and a Clerk production instance.');
+  if (production && (originUrl.protocol !== 'https:' || livekit?.protocol !== 'wss:')) {
+    throw new Error('Production requires HTTPS and a WSS LiveKit URL.');
   }
   return {
     port, host, trustProxyHops, origin: originUrl.origin,
-    clerkPublishableKey: env.CLERK_PUBLISHABLE_KEY,
+    ...insforgeSettings(env.INSFORGE_URL, env.INSFORGE_ANON_KEY),
     livekitUrl: livekit?.origin, livekitKey: env.LIVEKIT_API_KEY, livekitSecret: env.LIVEKIT_API_SECRET,
     databasePath: env.DATABASE_PATH || resolve(root, 'data/meetrix.sqlite'),
     assets: resolve(root, 'dist'), ...overrides,

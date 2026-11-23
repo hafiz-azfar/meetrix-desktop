@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { TokenVerifier } from 'livekit-server-sdk';
 import { createApp } from '../server/app.mjs';
-import { clerkHost } from '../server/auth.mjs';
+import { insforgeSettings } from '../server/auth.mjs';
 import { readConfig } from '../server/config.mjs';
 
 const origin = 'https://meetrix.test';
-const clerkPublishableKey = 'pk_test_' + Buffer.from('clerk.meetrix.test$').toString('base64url');
+const insforgeUrl = 'https://auth.meetrix.test';
 const livekitKey = 'test-api-key';
 const livekitSecret = 'not-a-real-secret-at-least-32-bytes';
 
@@ -19,7 +19,7 @@ async function fixture(t) {
     async removeParticipant(id, identity) { calls.push(['remove', id, identity]); },
   };
   const { app, close } = createApp({
-    origin, clerkPublishableKey, livekitKey, livekitSecret,
+    origin, insforgeUrl, livekitKey, livekitSecret,
     livekitUrl: 'wss://livekit.meetrix.test', databasePath: ':memory:',
   }, { rooms, authenticate: async token => {
     if (!['owner', 'guest', 'stranger'].includes(token)) throw Error('Bad session');
@@ -47,8 +47,10 @@ async function fixture(t) {
   return { api, create, connect, moderate, calls };
 }
 
-test('Clerk origin and LiveKit production configuration are pinned', () => {
-  assert.equal(clerkHost(clerkPublishableKey), 'clerk.meetrix.test');
+test('InsForge and LiveKit production configuration are pinned', () => {
+  assert.equal(insforgeSettings(insforgeUrl).insforgeUrl, insforgeUrl);
+  assert.throws(() => insforgeSettings('http://auth.meetrix.test'), /HTTPS/);
+  assert.throws(() => insforgeSettings(insforgeUrl, 'admin-key'), /ANON_KEY/);
   assert.throws(() => readConfig({ APP_ORIGIN: 'http://meetrix.test' }), /HTTPS/);
   assert.throws(() => readConfig({ NODE_ENV: 'production' }), /Production requires/);
   assert.throws(() => readConfig({ APP_ORIGIN: 'http://localhost:4317', HOST: '0.0.0.0' }), /loopback/);

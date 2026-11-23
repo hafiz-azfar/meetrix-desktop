@@ -9,7 +9,7 @@ const directory = resolve('test-results');
 await mkdir(directory, { recursive: true });
 const runDirectory = await mkdtemp(join(directory, 'rtc-'));
 const origin = 'http://localhost:4318';
-const clerkPublishableKey = 'pk_test_' + Buffer.from('clerk.meetrix.test$').toString('base64url');
+const insforgeUrl = 'https://auth.meetrix.test';
 const browser = await chromium.launch({
   ...(process.env.CI ? {} : { channel: 'chrome' }),
   args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
@@ -18,7 +18,7 @@ let backend;
 let frontend;
 try {
   backend = await startLocal({ directory: runDirectory, runtime: resolve('vendor/runtime'), origin,
-    testInstance: { clerkPublishableKey },
+    instance: { insforgeUrl },
     dependencies: { authenticate: async token => {
       if (!['host', 'guest'].includes(token)) throw Error('Invalid test user.');
       return token;

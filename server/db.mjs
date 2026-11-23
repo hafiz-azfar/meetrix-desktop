@@ -22,8 +22,16 @@ export function openDatabase(filename) {
       credential TEXT PRIMARY KEY,
       identity TEXT NOT NULL,
       name TEXT NOT NULL,
+      expires_at INTEGER NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'desktop'
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS oauth_requests (
+      id TEXT PRIMARY KEY,
+      verifier TEXT NOT NULL,
+      return_to TEXT NOT NULL,
       expires_at INTEGER NOT NULL
     ) STRICT;
+    CREATE INDEX IF NOT EXISTS oauth_requests_expiry ON oauth_requests(expires_at);
     CREATE INDEX IF NOT EXISTS desktop_sessions_expiry ON desktop_sessions(expires_at);
     CREATE TABLE IF NOT EXISTS meetings (
       id TEXT PRIMARY KEY,
@@ -86,6 +94,9 @@ export function openDatabase(filename) {
       created_at INTEGER NOT NULL
     ) STRICT;
   `);
+  if (!db.prepare('PRAGMA table_info(desktop_sessions)').all().some(column => column.name === 'kind')) {
+    db.exec("ALTER TABLE desktop_sessions ADD COLUMN kind TEXT NOT NULL DEFAULT 'desktop'");
+  }
   const columns = new Set(db.prepare('PRAGMA table_info(meetings)').all().map(column => column.name));
   if (!columns.has('duration_minutes')) db.exec('ALTER TABLE meetings ADD COLUMN duration_minutes INTEGER NOT NULL DEFAULT 60');
   if (!columns.has('encrypted')) {

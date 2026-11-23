@@ -6,7 +6,7 @@ import helmet from 'helmet';
 import { rateLimit } from 'express-rate-limit';
 import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
 import { z } from 'zod';
-import { clerkHost, clerkVerifier } from './auth.mjs';
+import { authenticationScope, createInsforgeAuth, insforgeSettings } from './auth.mjs';
 import { openDatabase } from './db.mjs';
 import { createDesktopAuth } from './desktop-auth.mjs';
 
@@ -14,6 +14,7 @@ const scrypt = promisify(scryptCallback);
 const maxDuration = 30 * 60 * 60 * 1000;
 const optionalPasscode = z.string().min(8).max(128).optional();
 const person = z.string().trim().min(1).max(60);
+const participantIdentity = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
 const meetingTitle = z.string().trim().min(1).max(100);
 const duration = z.number().int().min(15).max(1800);
 const schedule = z.object({
@@ -29,10 +30,10 @@ const schedule = z.object({
 const reschedule = z.object({ title: meetingTitle, startAt: z.iso.datetime(), duration }).strict();
 const join = z.object({ name: person, passcode: optionalPasscode, keyReady: z.boolean().optional() }).strict();
 const moderation = z.discriminatedUnion('action', [
-  z.object({ action: z.literal('decide'), identity: person, admit: z.boolean() }).strict(),
+  z.object({ action: z.literal('decide'), identity: participantIdentity, admit: z.boolean() }).strict(),
   z.object({ action: z.literal('lock'), locked: z.boolean() }).strict(),
-  z.object({ action: z.literal('mute'), identity: person }).strict(),
-  z.object({ action: z.literal('remove'), identity: person }).strict(),
+  z.object({ action: z.literal('mute'), identity: participantIdentity }).strict(),
+  z.object({ action: z.literal('remove'), identity: participantIdentity }).strict(),
   z.object({ action: z.literal('end') }).strict(),
 ]);
 const pollInput = z.object({ question: z.string().trim().min(1).max(200), choices: z.array(z.string().trim().min(1).max(80)).min(2).max(6) }).strict();
@@ -78,18 +79,17 @@ function view(meeting, userId) {
 }
 
 export function createApp(options, dependencies = {}) {
-  const { origin, clerkPublishableKey, livekitUrl, livekitKey, livekitSecret,
+  const { origin, livekitUrl, livekitKey, livekitSecret,
     databasePath, assets, trustProxyHops = 0, dev = false, desktop = false } = options;
   const db = dependencies.db ?? openDatabase(databasePath);
-  const authenticate = dependencies.authenticate ?? clerkVerifier(options);
+  const settings = insforgeSettings(options.insforgeUrl, options.insforgeAnonKey);
+  const scope = authenticationScope(settings.insforgeUrl);
   const rooms = dependencies.rooms ?? (livekitKey && new RoomServiceClient(
     livekitUrl.replace(/^ws/, 'http'), livekitKey, livekitSecret, { requestTimeout: 7 },
   ));
   const app = express();
-  const publicConfig = { clerkPublishableKey, desktop, desktopBrowserSignIn: true, mediaReady: Boolean(rooms) };
-  const clerkOrigin = 'https://' + clerkHost(clerkPublishableKey);
+  const publicConfig = { authProvider: 'insforge', desktop, desktopBrowserSignIn: true, mediaReady: Boolean(rooms) };
   const mediaOrigin = livekitUrl ? new URL(livekitUrl).origin : null;
-  const clerkAssets = ['https://img.clerk.com', 'https://images.clerk.dev', 'https://cdn.jsdelivr.net'];
   const localLoopback = new URL(origin).protocol === 'http:';
   const api = express.Router();
   const queues = new Map();
@@ -114,11 +114,11 @@ export function createApp(options, dependencies = {}) {
     referrerPolicy: { policy: 'no-referrer' },
     contentSecurityPolicy: { directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", clerkOrigin, 'https://challenges.cloudflare.com', 'https://cdn.jsdelivr.net'],
-      connectSrc: ["'self'", clerkOrigin, 'https://clerk-telemetry.com', ...(mediaOrigin ? [mediaOrigin, mediaOrigin.replace(/^ws/, 'http')] : [])],
-      imgSrc: ["'self'", 'data:', 'blob:', ...clerkAssets],
+      scriptSrc: ["'self'"],
+      connectSrc: ["'self'", ...(mediaOrigin ? [mediaOrigin, mediaOrigin.replace(/^ws/, 'http')] : [])],
+      imgSrc: ["'self'", 'data:', 'blob:'],
       styleSrc: ["'self'", "'unsafe-inline'"],
-      frameSrc: [clerkOrigin, 'https://challenges.cloudflare.com'],
+      frameSrc: ["'none'"],
       workerSrc: ["'self'", 'blob:'],
       mediaSrc: ["'self'", 'blob:'],
       objectSrc: ["'none'"],
@@ -142,17 +142,20 @@ export function createApp(options, dependencies = {}) {
     next();
   });
   api.use(express.json({ limit: '56kb' }));
-  async function clerkIdentity(req) {
+  const desktopAuth = createDesktopAuth({ db, origin, scope, limitOptions });
+  const auth = createInsforgeAuth({ db, origin, ...settings, sessions: desktopAuth, limitOptions, createAuth: dependencies.createAuth });
+  const authenticate = dependencies.authenticate ?? auth.currentIdentity;
+  api.use('/auth', auth.router);
+  api.use('/desktop-auth', desktopAuth.router);
+  async function bearerIdentity(req) {
     const token = /^Bearer ([A-Za-z0-9_.-]{1,4096})$/.exec(req.get('authorization') || '')?.[1];
     if (!token) throw new RequestError(401, 'Sign in to continue.');
     try { return await authenticate(token); }
     catch { throw new RequestError(401, 'Your sign-in has expired or could not be verified.'); }
   }
-  const desktopAuth = createDesktopAuth({ db, origin, clerkIdentity, limitOptions });
-  api.use('/desktop-auth', desktopAuth.router);
   api.use(async (req, _res, next) => {
     if (req.get('authorization')) {
-      req.identity = await clerkIdentity(req);
+      req.identity = await bearerIdentity(req);
     } else {
       const session = desktopAuth.session(req);
       if (!session) throw new RequestError(401, 'Sign in to continue.');
@@ -473,6 +476,7 @@ export function createApp(options, dependencies = {}) {
 
   const timer = setInterval(async () => {
     desktopAuth.sweep();
+    auth.sweep();
     for (const meeting of expired.all(Date.now() - maxDuration)) {
       try { await serial(meeting.id, () => disconnectRoom(findMeeting.get(meeting.id), meeting.owner)); }
       catch { console.error('Meeting cleanup is pending.'); }

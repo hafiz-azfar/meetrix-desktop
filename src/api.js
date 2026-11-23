@@ -1,13 +1,10 @@
-export function apiFor(getToken) {
+export function apiFor() {
   return async (path, options = {}) => {
-    const token = await getToken?.();
-    if (getToken && !token) throw new Error('Sign in to continue.');
     const response = await fetch('/api' + path, {
       method: options.method || 'GET',
       cache: 'no-store',
-      credentials: token ? 'omit' : 'same-origin',
-      headers: { ...(token ? { Authorization: 'Bearer ' + token } : {}),
-        ...(options.body ? { 'Content-Type': 'application/json' } : {}) },
+      credentials: 'same-origin',
+      headers: options.body ? { 'Content-Type': 'application/json' } : {},
       ...(options.body ? { body: JSON.stringify(options.body) } : {}),
     });
     const payload = await response.json();

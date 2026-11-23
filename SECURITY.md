@@ -1,14 +1,13 @@
 # Security model
 
-Meetrix is an early release. Its security model has the following boundaries and operational requirements.
+- Meetrix exchanges InsForge OAuth codes on the server. The OAuth return requires a one-time browser state and PKCE verifier. The app scopes user identities to the configured InsForge project.
+- The browser and desktop receive independent, revocable Meetrix cookies for up to 12 hours. Session credentials are hashed at rest. Cookies are HttpOnly and SameSite=Strict, with Secure enabled for HTTPS. Changing the identity provider leaves historical ownership records under their original account identifiers.
+- Desktop sign-in uses the system browser. An authenticated browser session must approve a short-lived pairing code, and only the requesting app can redeem the request. The app opens a browser URL built from the active workspace origin.
+- Electron content runs in a sandbox with context isolation and guarded navigation. The settings window exposes a limited connection interface. The local server binds to loopback.
+- Host controls check meeting ownership. Passcodes use salted scrypt. The API validates bodies, rate-limits requests, and issues 50-second initial room grants.
+- Notes, poll ballots, and whiteboards are stored in SQLite for standard rooms. Protect the storage volume and backups. Use one backend process for a workspace to keep moderation queues and limits coherent.
+- Encrypted rooms use LiveKit media and data encryption. The host distributes the random key separately. Signaling and meeting metadata are still visible to the deployment. Modified clients can publish unencrypted tracks.
+- Self-managed LiveKit can accept a previously issued unexpired token after removal. LiveKit Cloud offers provider-side revocation. Hosted deployments require HTTPS and WSS.
+- Application signing, production load verification, and independent security assessment remain release work.
 
-- The server pins Clerk's token issuer and authorized web origin, verifies RS256 and expiration claims, and derives identity from the verified session. The renderer receives the Clerk publishable key and short-lived, room-specific LiveKit grants.
-- Host operations use application-level ownership checks. The lobby and passcode gate token issuance. The API caps request sizes, validates request schemas, and rate-limits callers. Passcodes use salted scrypt. Meeting operations are serialized within the application process.
-- Desktop social sign-in uses the system browser for Clerk and requires an expiring pairing code plus proof from the requesting desktop. Only a valid Clerk browser session can approve a request. The app issues a separate, revocable workspace cookie with a 12-hour absolute expiration. The token is hashed at rest and the cookie is HttpOnly and SameSite=Strict. Hosted sessions also require Secure cookies. Desktop sessions have a separate sign-out and expiration from Clerk browser sessions.
-- Notes, poll ballots, and whiteboard content are stored in SQLite for standard rooms. Encrypt the host's disk or persistent volume as appropriate. Protect database backups and apply a retention policy. Run a single backend process for a workspace so the room queues and limits are coherent.
-- Electron content runs in a sandbox with context isolation. Node integration and cross-origin navigation are disabled in the workspace window. The settings window exposes only two fixed IPC operations. Screen sharing requires a user-selected source. The local service binds to loopback.
-- Encrypted rooms use LiveKit's encrypted media and data channels. The host distributes a random room key out of band. The app never sends that key to its server. Signaling, metadata, account traffic, and host operations follow the deployment's ordinary transport protections. A modified client with a valid token can publish its own unencrypted tracks. Keep invite and key access limited to trusted participants.
-- Self-managed LiveKit can accept a previously issued unexpired token after removal. Use LiveKit Cloud for provider-side revocation or account for the documented short token replay window. Terminate TLS at a trusted proxy for hosted deployments and restrict direct access to your application listener.
-- A 100-participant limit is configured. High-scale calls, production availability, and cross-network TURN behavior need independent load and deployment verification. Code signing and independent security assessment remain release work.
-
-For a security report, use the repository's private vulnerability reporting option if it is available. Avoid including credentials, participant identities, private invitation links, or meeting content in a public report.
+Use GitHub's private vulnerability reporting option when available. Keep credentials and private meeting information out of public issues.

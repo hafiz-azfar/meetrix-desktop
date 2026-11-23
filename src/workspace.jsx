@@ -198,9 +198,9 @@ function DeviceSettings({ prefs, updatePrefs }) {
   </div>;
 }
 
-export function Workspace({ config, getToken, user, accountControl }) {
+export function Workspace({ config, user, accountControl }) {
   const name = (user?.fullName || user?.username || user?.firstName || 'Participant').slice(0, 60);
-  const api = useMemo(() => apiFor(getToken), [getToken]);
+  const api = useMemo(apiFor, []);
   const [page, setPage] = useState('home');
   const [filter, setFilter] = useState('upcoming');
   const [meetings, setMeetings] = useState([]);
@@ -286,7 +286,7 @@ export function Workspace({ config, getToken, user, accountControl }) {
                 <button className="button" onClick={() => meeting.isHost ? enter(meeting) : setModal('join-' + meeting.id)}>{meeting.isHost ? 'Open' : 'Join'}</button></>}
             </article>)}
         </section>}
-        <footer className="workspace-foot"><span><ShieldCheck size={16} /> Clerk sign-in</span><span><Monitor size={16} /> LiveKit meetings</span>{config.desktop && <span><CircleHelp size={16} /> Local invites work on this PC</span>}</footer>
+        <footer className="workspace-foot"><span><ShieldCheck size={16} /> InsForge sign-in</span><span><Monitor size={16} /> LiveKit meetings</span>{config.desktop && <span><CircleHelp size={16} /> Local invites work on this PC</span>}</footer>
       </div>
     </main>
     {['start', 'schedule'].includes(modal) && <MeetingForm mode={modal} api={api} name={name} close={() => setModal('')} onCreated={created} />}

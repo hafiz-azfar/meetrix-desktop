@@ -13,6 +13,19 @@ let startupNotice = '';
 let changing = false;
 const settingsFile = join(__dirname, 'connect.html');
 let configPath;
+let localConfigPath;
+
+function localOptions() {
+  return {
+    directory: join(app.getPath('userData'), 'local'),
+    runtime: app.isPackaged ? join(process.resourcesPath, 'runtime') : join(__dirname, '..', 'vendor', 'runtime'),
+  };
+}
+
+function readLocalConfig() {
+  try { return JSON.parse(readFileSync(localConfigPath, 'utf8')); }
+  catch { return null; }
+}
 
 function originOf(value) {
   try { return new URL(value).origin; } catch { return null; }
@@ -77,7 +90,7 @@ function guardNavigation(contents, origin) {
 function settings() {
   if (settingsWindow && !settingsWindow.isDestroyed()) { settingsWindow.focus(); return; }
   settingsWindow = new BrowserWindow({
-    title: 'Connect Meetrix', width: 565, height: 495, minWidth: 480, minHeight: 430,
+    title: 'Connect Meetrix', width: 565, height: 680, minWidth: 480, minHeight: 470,
     backgroundColor: '#111817',
     webPreferences: { preload: join(__dirname, 'connect-preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, devTools: false },
   });
@@ -134,6 +147,34 @@ function bindSettings() {
     requireSettings(event);
     return { server: activeOrigin === local?.origin ? readServer() : activeOrigin || readServer(), local: Boolean(local), notice: startupNotice };
   });
+  ipcMain.handle('meetrix:configure-insforge', async (event, url, key) => {
+    requireSettings(event);
+    if (changing || local) return { error: 'A local workspace is already active or starting.' };
+    if (typeof url !== 'string' || url.length > 300 || typeof key !== 'string' || key.length > 4096) {
+      return { error: 'Enter an InsForge project URL and an optional public anon key.' };
+    }
+    changing = true;
+    try {
+      const { insforgeSettings } = await import('../server/auth.mjs');
+      const instance = insforgeSettings(url.trim(), key.trim() || undefined);
+      const response = await fetch(instance.insforgeUrl + '/api/auth/public-config', {
+        redirect: 'error', signal: AbortSignal.timeout(8000),
+      });
+      if (!response.ok || !Array.isArray((await response.json()).oAuthProviders)) {
+        throw new Error('That address did not return InsForge authentication settings.');
+      }
+      local = await startLocal({ ...localOptions(), instance });
+      writeFileSync(localConfigPath, JSON.stringify(instance), { mode: 0o600 });
+      writeFileSync(configPath, JSON.stringify({ server: null }), { mode: 0o600 });
+      await open(local.origin);
+      settingsWindow?.close();
+      return {};
+    } catch (error) {
+      local?.stop();
+      local = null;
+      return { error: error.message || 'Could not connect to this InsForge project.' };
+    } finally { changing = false; }
+  });
   ipcMain.handle('meetrix:connect', async (event, value) => {
     requireSettings(event);
     if (changing) return { error: 'A connection is already in progress.' };
@@ -143,7 +184,7 @@ function bindSettings() {
       if (origin !== local?.origin) {
         const result = await fetch(origin + '/api/config', { redirect: 'error', signal: AbortSignal.timeout(8000) });
         if (!result.ok || !result.headers.get('content-type')?.includes('application/json')
-          || !(await result.json()).clerkPublishableKey) throw new Error('That address did not return a Meetrix configuration.');
+          || (await result.json()).authProvider !== 'insforge') throw new Error('That address did not return a Meetrix configuration.');
       }
       await open(origin);
       writeFileSync(configPath, JSON.stringify({ server: origin === local?.origin ? null : origin }), { mode: 0o600 });
@@ -161,17 +202,15 @@ else {
   app.on('window-all-closed', () => { if (!changing) app.quit(); });
   app.on('before-quit', () => local?.stop());
   app.whenReady().then(async () => {
-    app.setAppUserModelId('dev.meetrix.desktop');
+    app.setAppUserModelId('dev.meetrix.insforge');
     configPath = join(app.getPath('userData'), 'server.json');
+    localConfigPath = join(app.getPath('userData'), 'insforge.json');
     Menu.setApplicationMenu(Menu.buildFromTemplate([{ label: 'Meetrix', submenu: [
       { label: 'Connect to a server…', click: settings }, { type: 'separator' }, { role: 'quit' },
     ] }, { label: 'Edit', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] }]));
     bindSettings();
     try {
-      local = await startLocal({
-        directory: join(app.getPath('userData'), 'local'),
-        runtime: app.isPackaged ? join(process.resourcesPath, 'runtime') : join(__dirname, '..', 'vendor', 'runtime'),
-      });
+      local = await startLocal({ ...localOptions(), instance: readLocalConfig() });
     } catch { startupNotice = 'The local meeting server could not start. You can still connect to a hosted Meetrix server.'; }
     try {
       const origin = readServer() || local?.origin;

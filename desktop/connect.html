@@ -7,8 +7,13 @@
 <body><main>
   <header><span aria-hidden="true">◎</span><strong>Meetrix</strong></header>
   <h1>Connect to a workspace</h1>
-  <p>Enter the HTTPS address of the Meetrix server you trust.</p>
-  <form><label for="server">Server address</label><input id="server" type="url" placeholder="https://meet.example.com" required><button type="submit">Connect</button></form>
+  <form id="insforge-form" hidden>
+    <h2>Local workspace</h2>
+    <label for="insforge-url">InsForge project URL</label><input id="insforge-url" type="url" required maxlength="300" placeholder="https://your-project.region.insforge.app">
+    <label for="insforge-key">Public anon key (optional)</label><input id="insforge-key" type="password" maxlength="4096" autocomplete="off">
+    <button type="submit">Use this InsForge project</button>
+  </form>
+  <form id="host-form"><h2>Hosted workspace</h2><label for="server">Server address</label><input id="server" type="url" placeholder="https://meet.example.com" required><button type="submit" class="secondary">Connect to server</button></form>
   <button type="button" class="secondary" id="local" hidden>Open local workspace</button>
   <p id="notice" role="status"></p>
 </main></body></html>

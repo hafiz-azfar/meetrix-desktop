@@ -1,4 +1,5 @@
 .env*
+.insforge
 .git
 .github
 node_modules

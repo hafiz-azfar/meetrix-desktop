@@ -2,9 +2,9 @@
 
 | Case | Expected behavior | Verification path |
 |---|---|---|
-| F01-H1 | Windows opens the Clerk form and starts its local media server | `node test/smoke-desktop.mjs` with a local build |
-| F01-H2 | Clerk test account signs up and the Meetrix backend accepts its session | `node test/smoke-desktop.mjs --clerk-account` |
-| F01-H3 | Google, Apple, and GitHub open in the system browser and Clerk approval signs the requesting desktop into its workspace | `node test/smoke-browser-sign-in.mjs --providers` |
+| F01-H1 | Windows opens the InsForge project chooser and rejects insecure origins | `node test/smoke-desktop.mjs` |
+| F01-H2 | Enabled providers redirect through InsForge, and a browser can approve the desktop app | `node test/smoke-browser-sign-in.mjs` with an authorized InsForge project |
+| F01-H3 | InsForge OAuth state and PKCE must match before a workspace cookie is issued | API test with simulated upstream responses |
 | F01-N1 | Pairing rejects changed proofs and expired codes, limits guesses, and revokes the desktop cookie on sign-out | API tests |
 | F02-H1 | Host creates and opens a LiveKit room | Desktop and RTC smoke tests |
 | F03-N1 | Missing/wrong passcode and invalid sessions cannot obtain a grant | API tests |

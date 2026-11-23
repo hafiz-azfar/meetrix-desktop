@@ -1,7 +1,7 @@
 id,area,feature,priority,original,clone,note
-F01,Accounts,Sign in and sign up,must,yes,yes,Clerk email flow
+F01,Accounts,Sign in and sign up,must,yes,yes,InsForge OAuth and email sign-in
 F02,Meetings,Instant meetings,must,yes,yes,Host room creation and preflight
-F03,Meetings,Join by code or invite,must,yes,yes,Clerk account required
+F03,Meetings,Join by code or invite,must,yes,yes,InsForge account required
 F04,Meetings,Schedule and send calendar invites,must,yes,partial,One-time or weekly scheduling with per-occurrence ICS export
 F05,Meetings,Audio and video,must,yes,yes,LiveKit audio and camera
 F06,Meetings,Share a screen or window,must,yes,yes,App capture picker on Windows

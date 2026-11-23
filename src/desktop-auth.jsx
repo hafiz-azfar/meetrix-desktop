@@ -1,18 +1,16 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowUpRight, Copy, LogOut } from 'lucide-react';
-import { UserButton, useClerk } from '@clerk/react';
 import { Logo } from './ui.jsx';
 
 const endpoint = '/api/desktop-auth';
 
-export async function desktopRequest(path, { body, token, signal } = {}) {
+export async function desktopRequest(path, { body, signal } = {}) {
   const response = await fetch(endpoint + path, {
     method: body ? 'POST' : 'GET',
     credentials: 'same-origin',
     cache: 'no-store',
     signal,
-    headers: { ...(body ? { 'Content-Type': 'application/json' } : {}),
-      ...(token ? { Authorization: 'Bearer ' + token } : {}) },
+    headers: body ? { 'Content-Type': 'application/json' } : {},
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
   const result = await response.json();
@@ -22,7 +20,7 @@ export async function desktopRequest(path, { body, token, signal } = {}) {
 
 const base64url = bytes => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
-export function DesktopBrowserSignIn({ onSignedIn }) {
+export function DesktopBrowserSignIn({ onSignedIn, providers }) {
   const [attempt, setAttempt] = useState(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
@@ -94,19 +92,19 @@ export function DesktopBrowserSignIn({ onSignedIn }) {
         <button className="button subtle" onClick={() => { setAttempt(null); setMessage(''); setError(''); }}>Cancel</button>
       </div>
       {message && <p role="status">{message}</p>}
-    </> : <button className="button primary desktop-social-button" disabled={loading} onClick={start}>
-      {loading ? 'Opening browser…' : 'Continue with Google, Apple, or GitHub'} <ArrowUpRight size={17} />
-    </button>}
+    </> : <><h2>Sign in to Meetrix</h2>
+      {providers.length > 0 && <p>{providers.map(provider => provider.name).join(' · ')}</p>}
+      <button className="button primary desktop-social-button" disabled={loading} onClick={start}>
+        {loading ? 'Opening browser…' : 'Continue in your browser'} <ArrowUpRight size={17} />
+      </button></>}
     {error && <p className="error" role="alert">{error}</p>}
   </section>;
 }
 
-export function ApproveDesktop({ requestId, getToken, user }) {
-  const clerk = useClerk();
+export function ApproveDesktop({ requestId, user, onSignedOut }) {
   const [status, setStatus] = useState('ready');
   const [error, setError] = useState('');
-  const name = (user?.fullName || user?.username || user?.firstName || 'Participant').slice(0, 60);
-  const email = user?.primaryEmailAddress?.emailAddress;
+  const name = user.fullName;
 
   async function submit(event) {
     event.preventDefault();
@@ -114,9 +112,7 @@ export function ApproveDesktop({ requestId, getToken, user }) {
     setStatus('submitting');
     setError('');
     try {
-      const token = await getToken();
-      if (!token) throw new Error('Sign in before approving the desktop app.');
-      await desktopRequest('/requests/' + requestId + '/approve', { body: { code, name }, token });
+      await desktopRequest('/requests/' + requestId + '/approve', { body: { code } });
       setStatus('done');
     } catch (failure) { setError(failure.message); setStatus('ready'); }
   }
@@ -129,7 +125,7 @@ export function ApproveDesktop({ requestId, getToken, user }) {
         <p>You can close this tab and return to Meetrix for Windows.</p>
       </> : <>
         <h1>Sign in to Meetrix for Windows</h1>
-        <div className="approval-account"><UserButton /><div><strong>{name}</strong>{email && <p>{email}</p>}</div></div>
+        <div className="approval-account"><strong>{name}</strong></div>
         <p>Enter the code shown in your Meetrix app to approve this account on Windows.</p>
         <form className="form" onSubmit={submit}>
           <label htmlFor="approval-code">Code from Meetrix</label>
@@ -138,7 +134,10 @@ export function ApproveDesktop({ requestId, getToken, user }) {
           {error && <p className="error" role="alert">{error}</p>}
           <button className="button primary" disabled={status === 'submitting'}>{status === 'submitting' ? 'Approving…' : 'Approve desktop sign-in'}</button>
         </form>
-        <button className="button subtle" onClick={() => clerk.signOut({ redirectUrl: location.pathname + location.search }).catch(() => setError('Could not switch accounts.'))}>Use a different account</button>
+        <button className="button subtle" onClick={async () => {
+          try { await desktopRequest('/sign-out', { body: {} }); onSignedOut(null); }
+          catch (failure) { setError(failure.message); }
+        }}>Use a different account</button>
       </>}
     </section>
   </main>;
