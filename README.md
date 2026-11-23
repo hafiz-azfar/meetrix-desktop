@@ -19,7 +19,7 @@ npm ci
 npm run dist
 ```
 
-The installer is written to `release/Meetrix-InsForge-Setup-0.1.3-x64.exe`. To preconfigure the installer with a project, copy `.env.example` to `.env`, fill the InsForge settings, and run `npm run dist:local`. If your project requires an anon key, use its public anon key. Installer and executable signing are left to the distributor.
+The installer is written to `release/Meetrix-InsForge-Setup-0.1.4-x64.exe`. To preconfigure the installer with a project, copy `.env.example` to `.env`, fill the InsForge settings, and run `npm run dist:local`. If your project requires an anon key, use its public anon key. Installer and executable signing are left to the distributor.
 
 ## Host a workspace
 
@@ -36,6 +36,7 @@ Meetrix keys account ownership by the InsForge project and user ID. Earlier Cler
 - Instant and recurring meetings, links and meeting codes, plus iCalendar invitations.
 - Audio, video, gallery and speaker views, screen sharing, chat, and reactions.
 - Microphone, camera, and speaker selection before joining or from **Devices** during a call. Browser support determines speaker availability.
+- **Settings** includes a live microphone meter, a speaker test tone, noise reduction, camera preview and mirroring, and saved defaults for joining a call. Preview and diagnostic media stays on your device.
 - Host moderation, passcodes, room locks, waiting rooms, and participant removal.
 - Hosts can allow invitees without accounts. The waiting room still applies, and the host sees those invitees labeled as unverified guests.
 - Shared notes, polls, and whiteboards. Encrypted rooms use a shared, client-generated key for LiveKit media and in-room data.

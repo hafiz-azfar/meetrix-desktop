@@ -1,8 +1,11 @@
-import React, { useEffect, useState } from 'react';
-import { Mic, Video, Volume2 } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Mic, Video, VideoOff, Volume2 } from 'lucide-react';
 
 const storageKey = 'meetrix-devices';
-const defaults = { camera: false, microphone: false, cameraId: '', microphoneId: '', speakerId: '' };
+const defaults = {
+  camera: false, microphone: false, cameraId: '', microphoneId: '', speakerId: '',
+  mirrorCamera: true, reduceNoise: true, speakerVolume: 1, layout: 'grid',
+};
 const fields = [
   { key: 'microphone', kind: 'audioinput', label: 'Microphone', Icon: Mic },
   { key: 'camera', kind: 'videoinput', label: 'Camera', Icon: Video },
@@ -24,12 +27,59 @@ export function captureOptions(id) {
   return id ? { deviceId: { exact: id } } : {};
 }
 
-export function DeviceFields({ prefs, changeDevice, showDefaults = false, updatePrefs, inCall = false }) {
+export function microphoneOptions(prefs) {
+  return { ...captureOptions(prefs.microphoneId), noiseSuppression: prefs.reduceNoise };
+}
+
+export function CameraPreview({ enabled, deviceId, mirror = true }) {
+  const [status, setStatus] = useState('');
+  const video = useRef(null);
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    let stream;
+    const element = video.current;
+    setStatus('Starting camera…');
+    Promise.resolve().then(() => navigator.mediaDevices.getUserMedia({ video: captureOptions(deviceId) }))
+      .then(result => {
+        if (cancelled) { result.getTracks().forEach(track => track.stop()); return; }
+        stream = result;
+        element.srcObject = result;
+        setStatus('');
+      })
+      .catch(() => { if (!cancelled) setStatus('Camera unavailable'); });
+    return () => {
+      cancelled = true;
+      element.srcObject = null;
+      stream?.getTracks().forEach(track => track.stop());
+    };
+  }, [deviceId, enabled]);
+  return <div className="preview">
+    <video className={mirror ? 'mirrored-video' : undefined} ref={video} autoPlay playsInline muted />
+    {(!enabled || status) && <div className="preview-empty" role="status"><VideoOff size={26} />
+      {enabled ? status : 'Camera preview is off'}
+    </div>}
+  </div>;
+}
+
+export function SpeakerVolume({ prefs, updatePrefs }) {
+  const percent = Math.round(prefs.speakerVolume * 100);
+  return <label className="volume-setting">
+    <span>Speaker volume</span>
+    <input type="range" min="0" max="100" value={percent}
+      aria-valuetext={percent + '%'} onChange={event => updatePrefs({ speakerVolume: event.target.valueAsNumber / 100 })} />
+    <output aria-hidden="true">{percent}%</output>
+  </label>;
+}
+
+export function DeviceFields({ prefs, changeDevice, kinds, inCall = false }) {
   const [devices, setDevices] = useState([]);
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const media = navigator.mediaDevices;
   const speakerSupported = typeof HTMLMediaElement.prototype.setSinkId === 'function';
+  const visibleFields = kinds ? fields.filter(field => kinds.includes(field.kind)) : fields;
+  const hasSpeaker = visibleFields.some(field => field.kind === 'audiooutput');
 
   useEffect(() => {
     let cancelled = false;
@@ -49,13 +99,13 @@ export function DeviceFields({ prefs, changeDevice, showDefaults = false, update
     setNotice('');
     try {
       if (!inCall) {
-        const results = await Promise.allSettled([
-          media.getUserMedia({ audio: true }),
-          media.getUserMedia({ video: true }),
-        ]);
-        for (const result of results) if (result.status === 'fulfilled') {
-          result.value.getTracks().forEach(track => track.stop());
-        }
+        const input = [];
+        if (visibleFields.some(field => field.kind !== 'videoinput')) input.push({ audio: true });
+        if (visibleFields.some(field => field.kind === 'videoinput')) input.push({ video: true });
+        const results = await Promise.allSettled(input.map(async constraints => {
+          const stream = await media.getUserMedia(constraints);
+          stream.getTracks().forEach(track => track.stop());
+        }));
         if (results.some(result => result.status === 'rejected')) setNotice('Some devices are unavailable or blocked by system permissions.');
       }
       setDevices(await media.enumerateDevices());
@@ -72,7 +122,7 @@ export function DeviceFields({ prefs, changeDevice, showDefaults = false, update
   }
 
   return <div className="device-fields">
-    {fields.map(field => {
+    {visibleFields.map(field => {
       const { key, kind, label, Icon } = field;
       const value = prefs[key + 'Id'];
       const available = devices.filter(device => device.kind === kind && device.deviceId && device.deviceId !== 'default');
@@ -84,13 +134,10 @@ export function DeviceFields({ prefs, changeDevice, showDefaults = false, update
           {value && !available.some(device => device.deviceId === value) && <option value={value}>Saved device</option>}
           {available.map((device, index) => <option key={device.deviceId} value={device.deviceId}>{device.label || label + ' ' + (index + 1)}</option>)}
         </select>
-        {showDefaults && key !== 'speaker' && <label className="check">
-          <input type="checkbox" checked={prefs[key]} onChange={event => updatePrefs({ [key]: event.target.checked })} /> Start on
-        </label>}
       </div>;
     })}
     <button type="button" className="button small" disabled={busy} onClick={refresh}>{inCall ? 'Refresh devices' : 'Detect devices'}</button>
-    {!speakerSupported && <p className="muted">This browser uses your system’s default speaker.</p>}
+    {hasSpeaker && !speakerSupported && <p className="muted">This browser uses your system’s default speaker.</p>}
     {notice && <p className="muted" role="status">{notice}</p>}
   </div>;
 }

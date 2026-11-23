@@ -91,7 +91,7 @@ function settings() {
   if (settingsWindow && !settingsWindow.isDestroyed()) { settingsWindow.focus(); return; }
   settingsWindow = new BrowserWindow({
     title: 'Connect Meetrix', width: 565, height: 680, minWidth: 480, minHeight: 470,
-    backgroundColor: '#111817',
+    backgroundColor: '#f5f6fa',
     webPreferences: { preload: join(__dirname, 'connect-preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, devTools: false },
   });
   settingsWindow.removeMenu();
@@ -109,7 +109,7 @@ async function open(origin) {
   const previous = window;
   const next = new BrowserWindow({
     title: 'Meetrix', width: 1220, height: 820, minWidth: 700, minHeight: 560,
-    backgroundColor: '#111817', show: false, icon: join(__dirname, 'icon.ico'),
+    backgroundColor: '#f5f6fa', show: false, icon: join(__dirname, 'icon.ico'),
     webPreferences: { session: browserSession, preload: join(__dirname, 'workspace-preload.cjs'),
       nodeIntegration: false, contextIsolation: true, sandbox: true,
       devTools: !app.isPackaged, spellcheck: false },

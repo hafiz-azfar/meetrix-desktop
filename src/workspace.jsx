@@ -1,20 +1,26 @@
-import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import {
-  ArrowDownToLine, ArrowRight, AudioLines, CalendarDays, Check, ChevronRight, CircleHelp,
-  Clipboard, Clock3, DoorOpen, Ellipsis, FileText, House, LockKeyhole, Mic, Monitor, Plus, Settings, ShieldCheck,
+  ArrowDownToLine, ArrowRight, CalendarDays, ChevronRight,
+  Clipboard, Clock3, DoorOpen, Ellipsis, FileText, House, LockKeyhole, Mic, Plus, Settings,
   Video, X,
 } from 'lucide-react';
 import { apiFor, calendarInvite, invitation, parseInvitation } from './api.js';
 import { generateRoomKey, validRoomKey } from './encryption.js';
 import { Logo, Dialog } from './ui.jsx';
 import { Notes } from './notes.jsx';
-import { captureOptions, DeviceFields, useDevicePreferences } from './media-devices.jsx';
+import { CameraPreview, DeviceFields, useDevicePreferences } from './media-devices.jsx';
+import { WorkspaceSettings } from './settings.jsx';
 
 const Conference = lazy(() => import('./conference.jsx').then(module => ({ default: module.Conference })));
 const panels = [
-  { id: 'home', title: 'Overview', icon: House },
+  { id: 'home', title: 'Home', icon: House },
   { id: 'meetings', title: 'Meetings', icon: CalendarDays },
   { id: 'settings', title: 'Settings', icon: Settings },
+];
+const meetingActions = [
+  { id: 'start', title: 'New meeting', description: 'Start a video call now', icon: Video },
+  { id: 'join', title: 'Join a meeting', description: 'Enter a link or code', icon: DoorOpen },
+  { id: 'schedule', title: 'Schedule meeting', description: 'Add a call to your agenda', icon: CalendarDays },
 ];
 const dateLabel = new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
 const timeLabel = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
@@ -64,7 +70,7 @@ function MeetingForm({ mode, meeting, api, name, close, onCreated }) {
         <label>Calendar duration<select name="duration" defaultValue={meeting?.duration || 60}>{[15, 30, 45, 60, 90, 120, 180, 1800].map(minutes => <option key={minutes} value={minutes}>{minutes < 120 ? minutes + ' minutes' : minutes / 60 + ' hours'}</option>)}</select></label>
       </>}
       {mode === 'schedule' && <label>Repeat<select name="repeats"><option value="1">One time</option><option value="4">Weekly, 4 occurrences</option><option value="8">Weekly, 8 occurrences</option><option value="12">Weekly, 12 occurrences</option></select></label>}
-      {mode !== 'edit' && <><label>Passcode <span className="muted">(optional)</span><input name="passcode" type="password" autoComplete="new-password" minLength={8} maxLength={128} placeholder="At least 8 characters" /></label>
+      {mode !== 'edit' && <><label><span>Passcode <span className="muted">(optional)</span></span><input name="passcode" type="password" autoComplete="new-password" minLength={8} maxLength={128} placeholder="At least 8 characters" /></label>
       <label className="check"><input type="checkbox" name="lobby" defaultChecked /><span><strong>Waiting room</strong><small>Admit each guest before they join.</small></span></label>
       <label className="check"><input type="checkbox" name="allowGuests" /><span><strong>Allow guests without an account</strong><small>The waiting room must be enabled.</small></span></label>
       <label className="check"><input type="checkbox" name="encrypted" /><span><strong>End-to-end encrypted room</strong><small>Share a separate room key with guests. Server-stored collaboration is disabled.</small></span></label></>}
@@ -89,7 +95,7 @@ function JoinForm({ code, close, onJoin, guest = false }) {
     }}>
       <label>Meeting link or code<input name="code" autoFocus={!guest || !code} required defaultValue={code} maxLength={300} /></label>
       {guest && <label>Display name<input name="name" autoFocus={Boolean(code)} required maxLength={60} autoComplete="name" /></label>}
-      <label>Passcode <span className="muted">(if required)</span><input name="passcode" type="password" autoComplete="off" minLength={8} maxLength={128} /></label>
+      <label><span>Passcode <span className="muted">(if required)</span></span><input name="passcode" type="password" autoComplete="off" minLength={8} maxLength={128} /></label>
       {error && <p className="error" role="alert">{error}</p>}
       <div className="dialog-actions"><button className="button" type="button" onClick={close}>Cancel</button><button className="button primary">Continue <ArrowRight size={16} /></button></div>
     </form>
@@ -102,20 +108,8 @@ function Preflight({ target, prefs, updatePrefs, api, name, close, onConnected, 
   const [roomKey, setRoomKey] = useState('');
   const [keyCopied, setKeyCopied] = useState(false);
   const [failure, setFailure] = useState('');
-  const [cameraFailure, setCameraFailure] = useState('');
-  const video = useRef(null);
-  useEffect(() => {
-    if (!prefs.camera || phase === 'connecting') return;
-    let cancelled = false;
-    let stream;
-    Promise.resolve().then(() => navigator.mediaDevices.getUserMedia({ video: captureOptions(prefs.cameraId) }))
-      .then(value => {
-        stream = value;
-        if (cancelled) value.getTracks().forEach(track => track.stop());
-        else if (video.current) { setCameraFailure(''); video.current.srcObject = value; }
-      }).catch(() => { if (!cancelled) setCameraFailure('Camera preview is unavailable. You can still join.'); });
-    return () => { cancelled = true; stream?.getTracks().forEach(track => track.stop()); };
-  }, [prefs.camera, prefs.cameraId, phase === 'connecting']);
+  const [camera, setCamera] = useState(prefs.camera);
+  const [microphone, setMicrophone] = useState(prefs.microphone);
   useEffect(() => {
     if (!['connecting', 'waiting', 'host-pending'].includes(phase)) return;
     let cancelled = false;
@@ -126,7 +120,7 @@ function Preflight({ target, prefs, updatePrefs, api, name, close, onConnected, 
           method: 'POST', body: { name, ...(guest ? { proof: target.proof } : {}), ...(validRoomKey(roomKey) ? { keyReady: true } : {}), ...(target.passcode ? { passcode: target.passcode } : {}) },
         });
         if (cancelled) return;
-        if (result.state === 'ready') onConnected({ ...result, ...(result.meeting.encrypted ? { roomKey } : {}) });
+        if (result.state === 'ready') onConnected({ ...result, media: { camera, microphone }, ...(result.meeting.encrypted ? { roomKey } : {}) });
         else if (result.state === 'key-required') { setNeedsKey(true); setPhase('preview'); }
         else {
           setPhase(result.hostPresent ? 'waiting' : 'host-pending');
@@ -139,18 +133,16 @@ function Preflight({ target, prefs, updatePrefs, api, name, close, onConnected, 
     if (phase === 'connecting') connect();
     else timer = setTimeout(connect, 4500);
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [phase, api, target, name, onConnected, roomKey, guest]);
+  }, [phase, api, target, name, onConnected, roomKey, guest, camera, microphone]);
   const pending = phase !== 'preview';
   return <Dialog title={target.title || 'Check your setup'} close={close}>
-    <div className="preview">
-      <video ref={video} autoPlay playsInline muted />
-      {(!prefs.camera || cameraFailure) && <div className="preview-empty"><Video size={28} /> Camera off</div>}
-    </div>
+    <CameraPreview enabled={camera && phase !== 'connecting'} deviceId={prefs.cameraId} mirror={prefs.mirrorCamera} />
     <div className="preflight-controls">
-      <button className={'button' + (prefs.microphone ? ' selected' : '')} onClick={() => updatePrefs({ microphone: !prefs.microphone })}><Mic size={17} /> Microphone {prefs.microphone ? 'on' : 'off'}</button>
-      <button className={'button' + (prefs.camera ? ' selected' : '')} onClick={() => updatePrefs({ camera: !prefs.camera })}><Video size={17} /> Camera {prefs.camera ? 'on' : 'off'}</button>
+      <button className={'button' + (microphone ? ' selected' : '')} disabled={phase === 'connecting'}
+        onClick={() => setMicrophone(!microphone)}><Mic size={17} /> Microphone {microphone ? 'on' : 'off'}</button>
+      <button className={'button' + (camera ? ' selected' : '')} disabled={phase === 'connecting'}
+        onClick={() => setCamera(!camera)}><Video size={17} /> Camera {camera ? 'on' : 'off'}</button>
     </div>
-    {cameraFailure && prefs.camera && <p className="muted">{cameraFailure}</p>}
     <details className="preflight-devices"><summary>Audio and video devices</summary>
       <DeviceFields prefs={prefs} changeDevice={({ key }, value) => updatePrefs({ [key + 'Id']: value })} />
     </details>
@@ -161,14 +153,6 @@ function Preflight({ target, prefs, updatePrefs, api, name, close, onConnected, 
     {pending && <p role="status" className="waiting"><span className="status-dot" />{phase === 'connecting' ? 'Connecting…' : phase === 'host-pending' ? 'Waiting for the host to start the meeting.' : 'The host will admit you from the waiting room.'}</p>}
     <div className="dialog-actions"><button className="button" onClick={close}>{pending ? 'Leave waiting room' : 'Back'}</button><button className="button primary" disabled={pending || (needsKey && !validRoomKey(roomKey))} onClick={() => { setFailure(''); setPhase('connecting'); }}>{target.isHost ? 'Enter room' : 'Join now'} <ArrowRight size={16} /></button></div>
   </Dialog>;
-}
-
-function DeviceSettings({ prefs, updatePrefs }) {
-  return <div className="settings-card">
-    <div className="section-header"><div><h2>Audio and video</h2><p>Set your defaults before entering a room.</p></div><AudioLines size={23} /></div>
-    <DeviceFields prefs={prefs} changeDevice={({ key }, value) => updatePrefs({ [key + 'Id']: value })}
-      showDefaults updatePrefs={updatePrefs} />
-  </div>;
 }
 
 export function GuestMeeting({ code, onBack }) {
@@ -246,26 +230,43 @@ export function Workspace({ config, user, accountControl }) {
     <aside className="sidebar">
       <Logo />
       <nav aria-label="Workspace">
-        {panels.map(({ id, title, icon: Icon }) => <button key={id} aria-current={page === id ? 'page' : undefined} className={page === id ? 'nav-button current' : 'nav-button'}
-          onClick={() => { setPage(id); setNotice(''); }}><Icon size={18} /><span>{title}</span>{page === id && <ChevronRight size={14} />}</button>)}
+        {panels.map(({ id, title, icon: Icon }) => <button key={id} aria-current={page === id ? 'page' : undefined} className="nav-button"
+          aria-label={title} title={title} onClick={() => { setPage(id); setNotice(''); }}><Icon size={19} /><span>{title}</span></button>)}
       </nav>
-      <div className="sidebar-foot"><div className="server-mode"><span className="status-dot" />{config.desktop ? 'Local workspace' : 'Connected workspace'}</div>{accountControl}<span>{name}</span></div>
+      <div className="sidebar-foot" title={config.desktop ? 'Meeting links work on this PC' : undefined}>
+        <span className="status-dot" /><span>{config.desktop ? 'Local workspace' : 'Connected workspace'}</span>
+      </div>
     </aside>
     <main className="main">
-      <header className="topbar"><span>Workspace <ChevronRight size={14} /> <strong>{panels.find(p => p.id === page)?.title}</strong></span><button className="button" onClick={() => setModal('join')}><DoorOpen size={16} /> Join a room</button></header>
+      <header className="topbar">
+        <span>Workspace <ChevronRight size={14} /> <strong>{panels.find(panel => panel.id === page).title}</strong></span>
+        <div className="workspace-account">
+          <span className="account-avatar" aria-hidden="true">{name.charAt(0).toUpperCase()}</span>
+          <strong title={name}>{name}</strong>{accountControl}
+        </div>
+      </header>
       <div className="main-content">
         {notice && <div className="notice" role="status"><span>{notice}</span><button className="icon-button" aria-label="Dismiss" onClick={() => setNotice('')}><X size={16} /></button></div>}
         {page === 'home' && <>
-          <p className="today"><span className="status-dot" />{dateLabel.format(new Date())}</p>
-          <h1>{user?.firstName ? 'Welcome, ' + user.firstName : 'Meeting workspace'}</h1>
-          <div className="action-grid">
-            <section className="quick-start"><div className="quick-copy"><div className="action-icon"><Video size={24} /></div><h2>Start a meeting</h2><p>Open a room and share its invite when you’re ready.</p><button className="button primary" onClick={() => setModal('start')}><Plus size={19} /> New meeting</button></div><div className="hero-art" aria-hidden="true"><span /><span /><span /><Video strokeWidth={1.05} size={70} /></div></section>
-            <section className="quick-schedule"><div className="action-icon"><CalendarDays size={23} /></div><h2>Plan ahead</h2><p>Pick a time and send guests a calendar invite.</p><button className="button" onClick={() => setModal('schedule')}>Schedule meeting <ArrowRight size={16} /></button></section>
+          <div className="page-head home-heading">
+            <h1>{user?.firstName ? 'Welcome, ' + user.firstName : 'Home'}</h1>
+            <p className="today"><CalendarDays size={17} />{dateLabel.format(new Date())}</p>
           </div>
+          <section className="action-grid" aria-label="Meeting actions">
+            {meetingActions.map(({ id, title, description, icon: Icon }) => <button key={id}
+              className={'action-card action-' + id} aria-label={title} onClick={() => setModal(id)}>
+              <span className="action-icon"><Icon size={24} /></span>
+              <span className="action-text"><strong>{title}</strong><span>{description}</span></span>
+              <ArrowRight className="action-arrow" size={19} aria-hidden="true" />
+            </button>)}
+          </section>
         </>}
-        {page === 'meetings' && <div className="page-head"><div><p className="today"><CalendarDays size={15} /> Calendar</p><h1>Meetings</h1></div><button className="button primary" onClick={() => setModal('schedule')}><Plus size={18} /> Schedule</button></div>}
-        {page === 'settings' ? <><p className="today"><Settings size={15} /> Preferences</p><h1>Settings</h1><DeviceSettings prefs={prefs} updatePrefs={updatePrefs} /></> : <section className="meeting-list">
-          <div className="section-header"><div><h2>{page === 'home' ? 'Upcoming meetings' : 'Your meetings'}</h2>{page === 'home' && <p>See what’s coming up or reopen a room.</p>}</div>{page === 'home'
+        {page === 'meetings' && <div className="page-head"><h1>Meetings</h1><div className="meeting-actions">
+          <button className="button" onClick={() => setModal('join')}><DoorOpen size={17} /> Join</button>
+          <button className="button primary" onClick={() => setModal('schedule')}><Plus size={18} /> Schedule</button>
+        </div></div>}
+        {page === 'settings' ? <><div className="page-head"><h1>Settings</h1></div><WorkspaceSettings prefs={prefs} updatePrefs={updatePrefs} /></> : <section className="meeting-list">
+          <div className="section-header"><h2>{page === 'home' ? 'Upcoming meetings' : 'Your meetings'}</h2>{page === 'home'
             ? <button className="button subtle" onClick={() => setPage('meetings')}>View all <ChevronRight size={16} /></button>
             : <div className="segment" aria-label="Meeting history">{['upcoming', 'past'].map(tab => <button key={tab} className={filter === tab ? 'active' : ''} aria-pressed={filter === tab} onClick={() => setFilter(tab)}>{tab === 'upcoming' ? 'Upcoming' : 'Past'}</button>)}</div>}</div>
           {loading && !rows.length ? <p className="empty">Loading meetings…</p> : rows.length === 0 ? <div className="empty"><CalendarDays size={25} /><strong>{filter === 'past' && page === 'meetings' ? 'No past meetings' : 'Your schedule is clear'}</strong><span>{filter === 'past' && page === 'meetings' ? 'Ended meetings appear here.' : 'Scheduled meetings will appear here.'}</span></div> :
@@ -278,7 +279,6 @@ export function Workspace({ config, user, accountControl }) {
                 <button className="button" onClick={() => meeting.isHost ? enter(meeting) : setModal('join-' + meeting.id)}>{meeting.isHost ? 'Open' : 'Join'}</button></>}
             </article>)}
         </section>}
-        <footer className="workspace-foot"><span><ShieldCheck size={16} /> InsForge sign-in</span><span><Monitor size={16} /> LiveKit meetings</span>{config.desktop && <span><CircleHelp size={16} /> Local invites work on this PC</span>}</footer>
       </div>
     </main>
     {['start', 'schedule'].includes(modal) && <MeetingForm mode={modal} api={api} name={name} close={() => setModal('')} onCreated={created} />}

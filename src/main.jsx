@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { ArrowUpRight, CalendarDays, Mic, Video } from 'lucide-react';
+import { DoorOpen } from 'lucide-react';
 import { ApproveDesktop, DesktopBrowserSignIn, DesktopSignOut, desktopRequest } from './desktop-auth.jsx';
 import { SignInForm } from './insforge-sign-in.jsx';
 import { GuestMeeting, Workspace } from './workspace.jsx';
@@ -32,23 +32,17 @@ function Login({ onSignedIn, onGuest }) {
     return () => control.abort();
   }, [retry]);
   return <main className="login">
-    <section className="login-intro">
-      <Logo />
-      <div className="login-story">
-        <div className="hero-glyph" aria-hidden="true"><Video size={46} strokeWidth={1.2} /></div>
-        <h1>{approvalPage ? 'Sign in to Meetrix for Windows.' : joinCode ? 'Join the conversation.' : 'Make room for a good meeting.'}</h1>
-        <div className="login-features"><span><Video size={17} /> Video rooms</span><span><CalendarDays size={17} /> Scheduling</span><span><Mic size={17} /> Screen and audio controls</span></div>
+    <section className="login-window" aria-label="Meetrix sign-in options">
+      <header className="login-header"><Logo />{isDesktop && <span>Windows</span>}</header>
+      <div className="login-actions">
+        {error ? <section className="sign-in-card"><p className="error" role="alert">{error}</p>
+          <button className="button" onClick={() => { setError(''); setRetry(count => count + 1); }}>Try again</button></section>
+        : methods ? isDesktop ? <DesktopBrowserSignIn onSignedIn={onSignedIn} providers={methods.providers} />
+          : <SignInForm methods={methods} continueTo={continueTo} onSignedIn={onSignedIn} />
+        : <p role="status">Loading sign-in methods…</p>}
+        {!approvalPage && <button className="button login-guest" onClick={onGuest}><DoorOpen size={17} /> Join as a guest</button>}
       </div>
-      <div className="login-caption">{isDesktop || approvalPage ? 'Meetrix for Windows' : 'Meetrix'} <ArrowUpRight size={15} /></div>
     </section>
-    <section className="login-form" aria-label="Sign-in options"><div className="login-actions">
-      {!approvalPage && <button className="button" onClick={onGuest}>Join as a guest</button>}
-      {error ? <section className="sign-in-card"><p className="error" role="alert">{error}</p>
-        <button className="button" onClick={() => { setError(''); setRetry(count => count + 1); }}>Try again</button></section>
-      : methods ? isDesktop ? <DesktopBrowserSignIn onSignedIn={onSignedIn} providers={methods.providers} />
-        : <SignInForm methods={methods} continueTo={continueTo} onSignedIn={onSignedIn} />
-      : <p role="status">Loading sign-in methods…</p>}
-    </div></section>
   </main>;
 }
 

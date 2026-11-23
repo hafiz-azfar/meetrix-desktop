@@ -14,7 +14,7 @@ import { Notes } from './notes.jsx';
 import { Polls } from './polls.jsx';
 import { Whiteboard } from './whiteboard.jsx';
 import { Dialog, Logo } from './ui.jsx';
-import { captureOptions, DeviceFields } from './media-devices.jsx';
+import { captureOptions, DeviceFields, microphoneOptions, SpeakerVolume } from './media-devices.jsx';
 
 const videoOptions = { adaptiveStream: true, dynacast: true, stopLocalTrackOnUnpublish: true };
 const messageTopic = 'meetrix.meeting';
@@ -45,16 +45,17 @@ export function Conference({ session, api, prefs, updatePrefs, onLeave }) {
   return <LiveKitRoom room={secureRoom || undefined} serverUrl={session.serverUrl} token={session.token} audio={false} video={false}
     options={secureRoom ? undefined : videoOptions} onError={error => setError(error.message || 'Could not connect to the room.')}>
     <Call session={session} api={api} prefs={prefs} updatePrefs={updatePrefs} onLeave={onLeave} connectionError={error} />
-    <RoomAudioRenderer />
+    <RoomAudioRenderer volume={prefs.speakerVolume} />
   </LiveKitRoom>;
 }
 
-function Tile({ participant, isHost, raised }) {
+function Tile({ participant, isHost, raised, mirror }) {
   const publication = participant.getTrackPublication(Track.Source.Camera);
   const showVideo = publication?.track && !publication.isMuted;
   const name = participant.name || 'Guest';
   return <article className={'tile' + (participant.isSpeaking ? ' speaking' : '')}>
-    {showVideo ? <VideoTrack trackRef={{ participant, publication, source: Track.Source.Camera }} />
+    {showVideo ? <VideoTrack className={participant.isLocal && mirror ? 'mirrored-video' : undefined}
+      trackRef={{ participant, publication, source: Track.Source.Camera }} />
       : <span className="tile-avatar">{initials(name)}</span>}
     <div className="tile-label">{raised && <Hand size={15} />} {name}{participant.isLocal && ' (you)'}{isHost && <small>Host</small>}{!participant.isMicrophoneEnabled && <MicOff size={14} />}</div>
   </article>;
@@ -67,7 +68,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError }) {
   const participants = useParticipants();
   // Keep all tracks subscribed, including screen audio rendered by RoomAudioRenderer.
   const shares = useTracks([Track.Source.ScreenShare]);
-  const [layout, setLayout] = useState('grid');
+  const [layout, setLayout] = useState(prefs.layout);
   const [panel, setPanel] = useState(session.meeting.isHost ? 'people' : '');
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
@@ -102,14 +103,15 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError }) {
     setEverConnected(true);
     didInitialize.current = true;
     run(async () => {
+      const media = session.media ?? prefs;
       const results = await Promise.allSettled([
-        prefs.microphone ? localParticipant.setMicrophoneEnabled(true, captureOptions(prefs.microphoneId)) : null,
-        prefs.camera ? localParticipant.setCameraEnabled(true, captureOptions(prefs.cameraId)) : null,
+        media.microphone ? localParticipant.setMicrophoneEnabled(true, microphoneOptions(prefs)) : null,
+        media.camera ? localParticipant.setCameraEnabled(true, captureOptions(prefs.cameraId)) : null,
         prefs.speakerId ? room.switchActiveDevice('audiooutput', prefs.speakerId) : null,
       ]);
       if (results.some(result => result.status === 'rejected')) throw new Error('One or more selected devices could not be started.');
     });
-  }, [online, localParticipant, prefs, room]);
+  }, [online, localParticipant, prefs, room, session.media]);
 
   useEffect(() => {
     if (!host || ended) return;
@@ -243,7 +245,8 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError }) {
         {!online && !participants.length ? <div className="empty"><Video size={28} /><strong>{ended ? 'Meeting connection closed' : 'Connecting to the room'}</strong></div> : null}
         {activeShare && <div className="share"><VideoTrack trackRef={activeShare} /><span>{activeShare.participant.name || 'Guest'} is sharing</span></div>}
         <div className="tile-grid" style={{ '--tiles': Math.min(3, Math.max(1, display.length)) }}>
-          {display.map(participant => <Tile key={participant.identity} participant={participant} isHost={participant.identity === session.hostIdentity} raised={hands[participant.identity]} />)}
+          {display.map(participant => <Tile key={participant.identity} participant={participant}
+            isHost={participant.identity === session.hostIdentity} raised={hands[participant.identity]} mirror={prefs.mirrorCamera} />)}
         </div>
       </section>
       {panel && <aside className="call-side"><div className="dialog-head"><h2>{panel === 'people' ? 'Participants' : panel === 'chat' ? 'Meeting chat' : panel === 'polls' ? 'Polls' : panel === 'board' ? 'Whiteboard' : 'Notes'}</h2><button className="icon-button" aria-label="Close panel" onClick={() => setPanel('')}><X size={18} /></button></div>
@@ -273,7 +276,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError }) {
     </div>
     <footer className="call-toolbar">
       <StartAudio label="Enable audio" className="button" />
-      <button className="call-control" disabled={!online} aria-pressed={isMicrophoneEnabled} onClick={() => run(() => localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled, captureOptions(prefs.microphoneId)))}>{isMicrophoneEnabled ? <Mic size={20} /> : <MicOff size={20} />}<span>{isMicrophoneEnabled ? 'Mute' : 'Unmute'}</span></button>
+      <button className="call-control" disabled={!online} aria-pressed={isMicrophoneEnabled} onClick={() => run(() => localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled, microphoneOptions(prefs)))}>{isMicrophoneEnabled ? <Mic size={20} /> : <MicOff size={20} />}<span>{isMicrophoneEnabled ? 'Mute' : 'Unmute'}</span></button>
       <button className="call-control" disabled={!online} aria-pressed={isCameraEnabled} onClick={() => run(() => localParticipant.setCameraEnabled(!isCameraEnabled, captureOptions(prefs.cameraId)))}>{isCameraEnabled ? <Video size={20} /> : <VideoOff size={20} />}<span>Camera</span></button>
       <button className="call-control" disabled={!online} aria-pressed={isScreenShareEnabled} onClick={() => run(() => localParticipant.setScreenShareEnabled(!isScreenShareEnabled, { audio: false }))}><MonitorUp size={20} /><span>{isScreenShareEnabled ? 'Stop share' : 'Share'}</span></button>
       <button className="call-control" aria-pressed={panel === 'people'} onClick={() => togglePanel('people')}><Users size={20} /><span>People {participants.length + guests.length}</span></button>
@@ -289,6 +292,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError }) {
     </footer>
     {settings && <Dialog title="Audio and video devices" close={() => setSettings(false)}>
       <DeviceFields prefs={prefs} changeDevice={changeDevice} inCall />
+      <SpeakerVolume prefs={prefs} updatePrefs={updatePrefs} />
       <div className="dialog-actions"><button className="button primary" onClick={() => setSettings(false)}>Done</button></div>
     </Dialog>}
     {confirmation && <Dialog title="Leave the meeting?" close={() => setConfirmation(false)}>
