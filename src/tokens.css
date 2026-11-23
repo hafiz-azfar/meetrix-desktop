@@ -20,6 +20,9 @@
   --danger: light-dark(#9e233f, #ffb1c2);
   --danger-bg: light-dark(#fff0f2, #432936);
   --danger-line: light-dark(#e3aab6, #98556b);
+  --caption-yellow: #ffeb66;
+  --caption-black: #000000;
+  --caption-white: #ffffff;
   --stage: #202438;
   --stage-tile: #292e48;
   --stage-line: #424863;

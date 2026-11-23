@@ -5,7 +5,7 @@ import {
   Video, X,
 } from 'lucide-react';
 import { apiFor, calendarInvite, calendarSeries, invitation, parseInvitation } from './api.js';
-import { maxOccurrences, meetingOccurrences } from './meeting-schedule.js';
+import { maxOccurrences, maxRepeatInterval, meetingOccurrences } from './meeting-schedule.js';
 import { generateRoomKey, validRoomKey } from './encryption.js';
 import { Logo, Dialog } from './ui.jsx';
 import { Notes } from './notes.jsx';
@@ -43,11 +43,16 @@ function MeetingForm({ mode, meeting, api, name, close, onCreated }) {
   const [when, setWhen] = useState(() => meeting ? localDateValue(meeting.startAt) : '');
   const [repeat, setRepeat] = useState('once');
   const [count, setCount] = useState('4');
+  const [interval, setInterval] = useState('1');
+  const unit = { daily: 'days', weekly: 'weeks', monthly: 'months' }[repeat];
+  function selectedDates() {
+    return meetingOccurrences(when, repeat, Number(count), Date.now(), unit ? Number(interval) : 1);
+  }
   const recurring = mode === 'schedule' && repeat !== 'once';
   let upcoming = [];
   let scheduleError = '';
   if (recurring && when) {
-    try { upcoming = meetingOccurrences(when, repeat, Number(count)); }
+    try { upcoming = selectedDates(); }
     catch (failure) { scheduleError = failure.message; }
   }
   const clockAdjusted = upcoming.some(time => localDateValue(time).slice(11) !== when.slice(11));
@@ -60,7 +65,7 @@ function MeetingForm({ mode, meeting, api, name, close, onCreated }) {
     try {
       const scheduled = mode !== 'start';
       const details = { title: form.get('title'), duration: Number(form.get('duration') || 60) };
-      const times = scheduled ? meetingOccurrences(when, repeat, Number(count)).map(time => time.toISOString()) : [];
+      const times = scheduled ? selectedDates().map(time => time.toISOString()) : [];
       if (scheduled) details.startAt = times[0];
       if (mode === 'edit') {
         if (when === localDateValue(meeting.startAt)) details.startAt = new Date(meeting.startAt).toISOString();
@@ -88,6 +93,10 @@ function MeetingForm({ mode, meeting, api, name, close, onCreated }) {
         <option value="weekly">Weekly</option><option value="monthly">Monthly</option>
       </select></label>}
       {recurring && <>
+        {unit && <label>Repeat every ({unit})
+          <input type="number" value={interval} onChange={event => setInterval(event.target.value)}
+            min="1" max={maxRepeatInterval} required />
+        </label>}
         <label>Number of occurrences<input type="number" value={count} onChange={event => setCount(event.target.value)}
           min="2" max={maxOccurrences} required /></label>
         {!!upcoming.length && <details><summary>Preview {upcoming.length} meeting times</summary>

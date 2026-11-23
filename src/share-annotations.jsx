@@ -9,6 +9,8 @@ const decoder = new TextDecoder();
 const maxStrokes = 48;
 const maxPoints = 120;
 const batchSize = 6;
+const tools = { pen: 'Freehand', line: 'Line', arrow: 'Arrow', rectangle: 'Rectangle', ellipse: 'Ellipse', text: 'Text' };
+const maxText = 80;
 const colors = { amber: '#ffc857', mint: '#72efb4', red: '#ff7184', white: '#f5f7ff' };
 
 function integer(value) {
@@ -16,10 +18,16 @@ function integer(value) {
 }
 
 function validStroke(stroke) {
-  return !!stroke && Object.hasOwn(colors, stroke.color) && Array.isArray(stroke.points) &&
-    stroke.points.length > 0 && stroke.points.length <= maxPoints &&
-    stroke.points.every(point => Array.isArray(point) && point.length === 2 &&
-      point.every(value => integer(value) && value <= 1000));
+  if (!stroke || !Object.hasOwn(colors, stroke.color) || !Array.isArray(stroke.points) ||
+      !stroke.points.length || stroke.points.length > maxPoints ||
+      !stroke.points.every(point => Array.isArray(point) && point.length === 2 &&
+        point.every(value => integer(value) && value <= 1000))) return false;
+  const tool = stroke.tool ?? 'pen';
+  if (!Object.hasOwn(tools, tool)) return false;
+  if (tool === 'pen') return true;
+  if (tool === 'text') return stroke.points.length === 1 && typeof stroke.text === 'string' &&
+    stroke.text.trim().length > 0 && stroke.text.length <= maxText;
+  return stroke.points.length === 2;
 }
 
 function useAnnotations(room, share) {
@@ -55,12 +63,13 @@ function useAnnotations(room, share) {
 
   function mergeStrokes(received) {
     const combined = new Map(history.current.map(stroke => [stroke.sequence, stroke]));
-    for (const { sequence, color, points } of received) combined.set(sequence, { sequence, color, points });
+    for (const stroke of received) combined.set(stroke.sequence, stroke);
     replaceStrokes([...combined.values()].sort((a, b) => a.sequence - b.sequence).slice(-maxStrokes));
   }
 
   async function relayStroke(stroke) {
-    const accepted = { color: stroke.color, points: stroke.points, sequence: ++sequence.current };
+    const { color, points, tool } = stroke;
+    const accepted = { color, points, tool, text: tool === 'text' ? stroke.text : undefined, sequence: ++sequence.current };
     mergeStrokes([accepted]);
     await publish({ type: 'ink', round: policy.current.round, strokes: [accepted] });
   }
@@ -167,10 +176,54 @@ function containedVideo(video) {
   return { width, height, left: (video.clientWidth - width) / 2, top: (video.clientHeight - height) / 2 };
 }
 
+function paintAnnotation(context, annotation, width, height) {
+  const points = annotation.points.map(([x, y]) => [x * width / 1000, y * height / 1000]);
+  const [x, y] = points[0];
+  const [endX, endY] = points.at(-1);
+  context.strokeStyle = context.fillStyle = colors[annotation.color];
+  context.beginPath();
+  switch (annotation.tool) {
+    case 'text': {
+      const fontSize = Math.max(13, width * .021);
+      context.font = '600 ' + fontSize + 'px system-ui';
+      context.textBaseline = 'top';
+      const left = Math.min(x, Math.max(0, width - context.measureText(annotation.text).width));
+      context.fillText(annotation.text, left, Math.max(0, Math.min(y, height - fontSize)), width);
+      return;
+    }
+    case 'rectangle':
+      context.rect(x, y, endX - x, endY - y);
+      break;
+    case 'ellipse':
+      context.ellipse((x + endX) / 2, (y + endY) / 2,
+        Math.abs(x - endX) / 2, Math.abs(y - endY) / 2, 0, 0, 2 * Math.PI);
+      break;
+    case 'arrow': {
+      const angle = Math.atan2(endY - y, endX - x);
+      const tip = Math.min(Math.hypot(endX - x, endY - y) / 2, context.lineWidth * 5);
+      context.moveTo(x, y);
+      context.lineTo(endX, endY);
+      for (const offset of [-Math.PI / 6, Math.PI / 6]) {
+        context.moveTo(endX, endY);
+        context.lineTo(endX - tip * Math.cos(angle + offset), endY - tip * Math.sin(angle + offset));
+      }
+      break;
+    }
+    default:
+      context.moveTo(x, y);
+      if (points.length === 1) context.lineTo(x + .1, y);
+      else for (const [left, top] of points.slice(1)) context.lineTo(left, top);
+  }
+  context.stroke();
+}
+
 export function ScreenPresentation({ room, share, withSound, online }) {
   const { isPresenter, canDraw, state, draw, change, strokes, error } = useAnnotations(room, share);
   const [drawing, setDrawing] = useState(false);
   const [color, setColor] = useState('amber');
+  const [tool, setTool] = useState('pen');
+  const [text, setText] = useState('');
+  const [saveError, setSaveError] = useState('');
   const [fit, setFit] = useState(null);
   const [draft, setDraft] = useState(null);
   const video = useRef(null);
@@ -214,17 +267,7 @@ export function ScreenPresentation({ room, share, withSound, online }) {
     paint.lineWidth = Math.max(3 * ratio, board.width * 0.004);
     paint.lineCap = 'round';
     paint.lineJoin = 'round';
-    for (const stroke of draft ? [...strokes, draft] : strokes) {
-      paint.strokeStyle = colors[stroke.color];
-      paint.beginPath();
-      stroke.points.forEach(([x, y], index) => {
-        const left = x * board.width / 1000;
-        const top = y * board.height / 1000;
-        if (index === 0) paint.moveTo(left, top);
-        paint.lineTo(left + (stroke.points.length === 1 ? 0.1 : 0), top);
-      });
-      paint.stroke();
-    }
+    for (const stroke of draft ? [...strokes, draft] : strokes) paintAnnotation(paint, stroke, width, height);
   }, [draft, fit, strokes]);
 
   function location(event) {
@@ -235,8 +278,13 @@ export function ScreenPresentation({ room, share, withSound, online }) {
 
   function begin(event) {
     if (!editing || active.current || event.button !== 0) return;
+    const point = location(event);
+    if (tool === 'text') {
+      if (text.trim()) { void draw({ tool, color, text: text.trim(), points: [point] }); setText(''); }
+      return;
+    }
     event.currentTarget.setPointerCapture(event.pointerId);
-    active.current = { pointer: event.pointerId, stroke: { color, points: [location(event)] } };
+    active.current = { pointer: event.pointerId, stroke: { color, tool, points: tool === 'pen' ? [point] : [point, point] } };
     setDraft(active.current.stroke);
   }
 
@@ -244,6 +292,11 @@ export function ScreenPresentation({ room, share, withSound, online }) {
     if (active.current?.pointer !== event.pointerId) return;
     const stroke = active.current.stroke;
     const point = location(event);
+    if (stroke.tool !== 'pen') {
+      active.current.stroke = { ...stroke, points: [stroke.points[0], point] };
+      setDraft(active.current.stroke);
+      return;
+    }
     const [x, y] = stroke.points.at(-1);
     if (stroke.points.length >= maxPoints || Math.hypot(point[0] - x, point[1] - y) < 4) return;
     active.current.stroke = { ...stroke, points: [...stroke.points, point] };
@@ -255,7 +308,32 @@ export function ScreenPresentation({ room, share, withSound, online }) {
     const stroke = active.current.stroke;
     active.current = null;
     setDraft(null);
-    if (editing && event.type === 'pointerup') void draw(stroke);
+    if (editing && event.type === 'pointerup') void draw(stroke.tool === 'pen'
+      ? stroke : { ...stroke, points: [stroke.points[0], location(event)] });
+  }
+
+  function saveSnapshot() {
+    const source = video.current;
+    if (!source || source.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+      setSaveError('Wait for the shared video before saving.');
+      return;
+    }
+    setSaveError('');
+    const snapshot = document.createElement('canvas');
+    const scale = Math.min(1, 1920 / Math.max(source.videoWidth, source.videoHeight));
+    snapshot.width = Math.round(source.videoWidth * scale);
+    snapshot.height = Math.round(source.videoHeight * scale);
+    try {
+      const paint = snapshot.getContext('2d');
+      paint.drawImage(source, 0, 0, snapshot.width, snapshot.height);
+      paint.lineWidth = Math.max(3, snapshot.width * .004);
+      paint.lineCap = paint.lineJoin = 'round';
+      for (const stroke of strokes) paintAnnotation(paint, stroke, snapshot.width, snapshot.height);
+      const link = document.createElement('a');
+      link.href = snapshot.toDataURL('image/png');
+      link.download = 'meetrix-presentation.png';
+      link.click();
+    } catch { setSaveError('Could not save the annotated presentation.'); }
   }
 
   return <div className="share">
@@ -267,14 +345,20 @@ export function ScreenPresentation({ room, share, withSound, online }) {
     {online && (canDraw || strokes.length > 0) && <div className="share-annotation-tools" aria-label="Presentation annotations">
       {canDraw && <button type="button" className="button small" disabled={!fit} aria-pressed={editing}
         onClick={() => setDrawing(previous => !previous)}><Pencil size={15} /> Annotate</button>}
+      {editing && <select className="annotation-field" aria-label="Annotation tool" value={tool} onChange={event => setTool(event.target.value)}>
+        {Object.entries(tools).map(([value, name]) => <option key={value} value={value}>{name}</option>)}
+      </select>}
+      {editing && tool === 'text' && <input className="annotation-field" aria-label="Annotation text"
+        placeholder="Type, then click on the share" value={text} maxLength={maxText} onChange={event => setText(event.target.value)} />}
       {editing && Object.entries(colors).map(([name, ink]) => <button type="button" className="swatch"
         key={name} title={name} aria-label={name + ' annotation pen'} aria-pressed={color === name}
         style={{ '--ink': ink }} onClick={() => setColor(name)} />)}
       {isPresenter && <button type="button" className="button small" aria-pressed={state.allowed}
         onClick={() => change({ allowed: !state.allowed })}>Allow attendee drawing</button>}
+      {isPresenter && strokes.length > 0 && <button type="button" className="button small" onClick={saveSnapshot}>Save annotated image</button>}
       {isPresenter && strokes.length > 0 && <button type="button" className="icon-button" aria-label="Clear annotations"
         title="Clear annotations" onClick={() => change({ round: state.round + 1 })}><Eraser size={17} /></button>}
     </div>}
-    {error && <p className="share-annotation-error" role="alert">{error}</p>}
+    {(error || saveError) && <p className="share-annotation-error" role="alert">{error || saveError}</p>}
   </div>;
 }

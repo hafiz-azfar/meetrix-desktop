@@ -23,6 +23,11 @@ export function breakoutStore(db) {
   const selectionEnabled = db.prepare('SELECT 1 FROM breakout_choice_sets WHERE meeting = ?');
   const enableSelection = db.prepare('INSERT INTO breakout_choice_sets(meeting) VALUES (?)');
   const disableSelection = db.prepare('DELETE FROM breakout_choice_sets WHERE meeting = ?');
+  const readDeadline = db.prepare('SELECT closes_at AS closesAt FROM breakout_deadlines WHERE meeting = ?');
+  const saveDeadline = db.prepare(`INSERT INTO breakout_deadlines(meeting, closes_at) VALUES (?, ?)
+    ON CONFLICT(meeting) DO UPDATE SET closes_at = min(breakout_deadlines.closes_at, excluded.closes_at)`);
+  const clearDeadline = db.prepare('DELETE FROM breakout_deadlines WHERE meeting = ?');
+  const dueDeadlines = db.prepare('SELECT meeting FROM breakout_deadlines WHERE closes_at <= ? ORDER BY closes_at LIMIT 50');
   const closeRooms = db.prepare('UPDATE breakout_rooms SET closed_at = ? WHERE meeting = ? AND closed_at IS NULL');
   const pending = db.prepare('SELECT id FROM breakout_rooms WHERE meeting = ? AND closed_at IS NOT NULL AND cleaned_at IS NULL');
   const pendingMeetings = db.prepare('SELECT DISTINCT meeting FROM breakout_rooms WHERE closed_at IS NOT NULL AND cleaned_at IS NULL LIMIT 50');
@@ -59,9 +64,13 @@ export function breakoutStore(db) {
     assignedUncleaned(meeting, identity) { return assignedUncleaned.all(meeting, identity); },
     removeMember(meeting, identity) { removeMember.run(identity, meeting); },
     choices(meeting) { return selectionEnabled.get(meeting) ? active.all(meeting) : []; },
-    open(meeting, plan, selfSelect) {
+    closesAt(meeting) { return readDeadline.get(meeting)?.closesAt ?? null; },
+    scheduleClose(meeting, closesAt) { saveDeadline.run(meeting, closesAt); },
+    due(now) { return dueDeadlines.all(now); },
+    open(meeting, plan, selfSelect, closesAt) {
       transaction(() => {
         if (selfSelect) enableSelection.run(meeting);
+        if (closesAt != null) saveDeadline.run(meeting, closesAt);
         for (const [position, room] of plan.entries()) {
           const id = 'breakout_' + randomBytes(12).toString('base64url');
           insertRoom.run(id, meeting, room.name, position);
@@ -79,6 +88,7 @@ export function breakoutStore(db) {
       return transaction(() => {
         const result = closeRooms.run(Date.now(), meeting).changes;
         disableSelection.run(meeting);
+        clearDeadline.run(meeting);
         return result;
       });
     },

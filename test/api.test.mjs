@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { once } from 'node:events';
 import { ParticipantInfo_State, TokenVerifier, TrackSource } from 'livekit-server-sdk';
 import { createApp } from '../server/app.mjs';
@@ -120,6 +121,13 @@ test('weekly occurrences are created together and only the host can reschedule a
   assert.equal((await api(path, { method: 'PATCH', body })).json.duration, 90);
   await connect(series.json.id, 'owner');
   assert.equal((await api(path, { method: 'PATCH', body })).status, 409);
+  const dates = Array.from({ length: 52 }, (_, index) => new Date(time + (index + 1) * 86400000).toISOString());
+  assert.equal((await create({ startAt, additionalStarts: dates })).status, 400);
+  const longer = await create({ startAt, additionalStarts: dates.slice(0, 51) });
+  assert.equal(longer.status, 201);
+  assert.equal(longer.json.scheduledCount, 52);
+  assert.equal(new Set(longer.json.scheduledMeetings.map(meeting => meeting.id)).size, 52);
+  assert.equal((await api('/meetings')).json.length, 54);
 });
 
 test('accountless guests need host opt-in, the passcode, and admission for each meeting', async t => {
@@ -309,6 +317,49 @@ test('the waiting room blocks media grants and collaboration until an attendee i
   assert.equal((await wait('guest', 'stranger')).status, 200);
   assert.equal((await moderate(id, { action: 'decide', identity: 'guest', admit: false })).status, 200);
   assert.equal((await place(guest.routingKey, id, 1)).status, 403);
+});
+
+test('breakout deadlines close rooms without a moderator client and preserve access controls', async t => {
+  const { api, create, connect, moderate, calls } = await fixture(t);
+  const { id } = (await create({ lobby: true })).json;
+  await connect(id, 'owner');
+  await connect(id, 'guest');
+  assert.equal((await moderate(id, { action: 'decide', identity: 'guest', admit: true })).status, 200);
+  const guest = (await connect(id, 'guest')).json;
+  const path = '/meetings/' + id;
+  const rooms = [{ name: 'Timed room', members: ['guest'] }];
+  const manage = (body, token = 'owner') => api(path + '/breakouts', { method: 'POST', body, token });
+  const placement = roomId => api(path + '/placement', {
+    method: 'POST', token: '', body: { key: guest.routingKey, roomId },
+  });
+  assert.equal((await manage({ action: 'open', rooms, durationSeconds: 29 })).status, 400);
+  const opened = await manage({ action: 'open', rooms, durationSeconds: 120 });
+  assert.equal(opened.status, 200);
+  const timed = opened.json.rooms[0].id;
+  assert.ok(opened.json.closesAt > Date.now() + 110_000);
+  const moved = (await placement(id)).json;
+  assert.equal(moved.roomId, timed);
+  assert.equal(moved.breakoutClosesAt, opened.json.closesAt);
+  assert.equal((await manage({ action: 'close', delaySeconds: 1 }, 'guest')).status, 403);
+  const countdown = await manage({ action: 'close', delaySeconds: 1 });
+  assert.equal(countdown.status, 200);
+  assert.ok(countdown.json.closesAt < opened.json.closesAt);
+  assert.equal((await manage({ action: 'close', delaySeconds: 60 })).json.closesAt, countdown.json.closesAt);
+  const stopWaiting = Date.now() + 5000;
+  while (!calls.some(([event, room]) => event === 'end' && room === timed)) {
+    assert.ok(Date.now() < stopWaiting, 'LiveKit cleanup was not run automatically');
+    await sleep(100);
+  }
+  const returned = (await placement(timed)).json;
+  assert.equal(returned.roomId, id);
+  assert.ok(returned.token);
+  assert.equal(returned.breakoutClosesAt, undefined);
+  const cleared = (await api(path + '/breakouts')).json;
+  assert.equal(cleared.closesAt, null);
+  assert.deepEqual(cleared.rooms, []);
+  const reopened = await manage({ action: 'open', rooms });
+  assert.equal(reopened.status, 200);
+  assert.equal(reopened.json.closesAt, null);
 });
 
 test('admitted attendees may choose only active breakout rooms when the moderator allows it', async t => {

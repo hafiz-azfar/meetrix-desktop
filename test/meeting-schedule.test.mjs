@@ -30,8 +30,19 @@ test('weekday meetings skip weekends and monthly meetings clamp each month indep
   ]);
   assert.throws(() => meetingOccurrences('2028-01-29T10:15', 'weekdays', 3, now), /Monday through Friday/);
   assert.throws(() => meetingOccurrences('2028-02-30T10:15', 'daily', 3, now), /valid meeting date/);
-  assert.throws(() => meetingOccurrences('2028-01-28T10:15', 'daily', 13, now), /12 occurrences/);
+  assert.throws(() => meetingOccurrences('2028-01-28T10:15', 'daily', 53, now), /52 occurrences/);
   assert.throws(() => meetingOccurrences('2028-12-01T10:15', 'monthly', 4, now), /within the next year/);
+});
+
+test('longer schedules and custom intervals preserve local start times', () => {
+  const now = Date.parse('2026-03-01T00:00:00Z');
+  const long = meetingOccurrences('2026-03-05T11:00', 'weekly', 52, now);
+  assert.equal(long.length, 52);
+  assert.equal(long.at(-1).getHours(), 11);
+  assert.deepEqual(iso(meetingOccurrences('2026-03-05T11:00', 'weekly', 3, now, 2)), [
+    '2026-03-05T16:00:00.000Z', '2026-03-19T15:00:00.000Z', '2026-04-02T15:00:00.000Z',
+  ]);
+  assert.throws(() => meetingOccurrences('2026-03-05T11:00', 'weekly', 3, now, 0), /repeat interval/);
 });
 
 test('calendar files include distinct event IDs and fold escaped Unicode text correctly', () => {

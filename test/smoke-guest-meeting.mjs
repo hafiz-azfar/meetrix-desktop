@@ -126,6 +126,7 @@ try {
   await host.getByLabel('Meeting name').fill('Planning series');
   await host.getByLabel('Start time').fill(localTime);
   await host.getByLabel('Repeat', { exact: true }).selectOption('monthly');
+  await host.getByLabel('Repeat every (months)').fill('2');
   await host.getByLabel('Number of occurrences').fill('3');
   await host.getByRole('dialog').getByRole('button', { name: 'Schedule', exact: true }).click();
   const calendarDownload = host.waitForEvent('download');
@@ -134,6 +135,8 @@ try {
   assert.match(calendar.suggestedFilename(), /\.ics$/);
   const schedule = await readFile(await calendar.path(), 'utf8');
   assert.equal([...schedule.matchAll(/BEGIN:VEVENT/g)].length, 3);
+  const calendarMonths = [...schedule.matchAll(/^DTSTART:(\d{4})(\d{2})/gm)].map(([, year, month]) => Number(year) * 12 + Number(month));
+  assert.deepEqual(calendarMonths.slice(1).map((month, index) => month - calendarMonths[index]), [2, 2]);
   await host.getByRole('button', { name: 'Home', exact: true }).click();
   await host.screenshot({ path: resolve(results, 'meetrix-home.png') });
   await host.getByRole('button', { name: 'Settings', exact: true }).click();
@@ -192,6 +195,8 @@ try {
   await host.getByRole('button', { name: 'Appearance' }).click();
   await host.getByLabel('App theme').selectOption('light');
   await host.getByRole('button', { name: 'Accessibility', exact: true }).click();
+  await host.getByLabel('Caption text size').selectOption('largest');
+  await host.getByLabel('Caption contrast').selectOption('yellow');
   await host.getByLabel('Meeting chat text size').selectOption('largest');
   await host.getByLabel('Announce new messages in the open chat panel').uncheck();
   await host.getByLabel('Reduce motion').check();
@@ -282,6 +287,16 @@ try {
 
   await guest.getByRole('button', { name: 'Call statistics' }).click();
   await guest.locator('.stat-sample').filter({ hasText: 'Camera' }).getByText(/\d+ kb\/s/).waitFor();
+  const statsDownload = guest.waitForEvent('download');
+  await guest.getByRole('button', { name: 'Save call statistics' }).click();
+  const statsFile = await statsDownload;
+  const metrics = JSON.parse(await readFile(await statsFile.path(), 'utf8'));
+  assert.equal(statsFile.suggestedFilename(), 'meetrix-call-statistics.json');
+  assert.ok(metrics.tracks.some(track => track.track === 'Camera' && track.direction === 'Received'));
+  for (const metric of metrics.tracks) {
+    assert.deepEqual(Object.keys(metric).sort(), ['bitrateKbps', 'codec', 'direction', 'framesPerSecond',
+      'jitterMs', 'packetLossPercent', 'resolution', 'roundTripMs', 'track']);
+  }
   await host.getByRole('button', { name: 'Share', exact: true }).click();
   assert.equal(await host.getByLabel('Include sound').isChecked(), false);
   await host.getByLabel('Include sound').check();
@@ -296,6 +311,32 @@ try {
   assert.equal(await guest.getByRole('button', { name: 'Annotate', exact: true }).count(), 0);
   await drawOnShare(host, 0.43);
   await waitForInk(guest, 30);
+  const annotationTool = host.getByLabel('Annotation tool');
+  const annotationFrame = await host.getByLabel('Presentation annotation canvas').boundingBox();
+  assert.ok(annotationFrame);
+  for (const tool of ['line', 'arrow', 'rectangle', 'ellipse']) {
+    await annotationTool.selectOption(tool);
+    await host.mouse.move(annotationFrame.x + annotationFrame.width * .4, annotationFrame.y + annotationFrame.height * .25);
+    await host.mouse.down();
+    await host.mouse.move(annotationFrame.x + annotationFrame.width * .55, annotationFrame.y + annotationFrame.height * .4);
+    await host.mouse.up();
+  }
+  await annotationTool.selectOption('text');
+  await host.getByLabel('Annotation text').fill('Review this area');
+  await host.getByLabel('Presentation annotation canvas').click({
+    position: { x: annotationFrame.width * .25, y: annotationFrame.height * .55 },
+  });
+  await host.waitForFunction(() => !document.querySelector('input[aria-label="Annotation text"]').value);
+  await waitForInk(guest, 200);
+  const snapshot = host.waitForEvent('download');
+  await host.getByRole('button', { name: 'Save annotated image' }).click();
+  const image = await snapshot;
+  assert.equal(image.suggestedFilename(), 'meetrix-presentation.png');
+  const png = await readFile(await image.path());
+  assert.deepEqual([...png.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+  assert.ok(png.readUInt32BE(16) > 0);
+  assert.equal(await guest.getByRole('button', { name: 'Save annotated image' }).count(), 0);
+  await guest.screenshot({ path: resolve(results, 'meetrix-annotated-share.png') });
   await host.getByRole('button', { name: 'Allow attendee drawing', exact: true }).click();
   await guest.getByRole('button', { name: 'Annotate', exact: true }).waitFor();
   await host.getByRole('button', { name: 'Clear annotations', exact: true }).click();
@@ -343,6 +384,8 @@ try {
   await host.getByRole('button', { name: 'Send caption' }).click();
   const overlay = guest.locator('.caption-overlay').getByText('The demo starts now.');
   await overlay.waitFor();
+  await host.locator('.caption-overlay[data-size="largest"][data-contrast="yellow"]').getByText('The demo starts now.').waitFor();
+  assert.equal(await guest.locator('.caption-overlay').getAttribute('data-size'), 'standard');
   await guest.getByLabel('Show captions on stage').uncheck();
   await overlay.waitFor({ state: 'detached' });
   await guest.getByRole('region', { name: 'Caption history' }).getByText('The demo starts now.').waitFor();
@@ -470,8 +513,11 @@ try {
   await host.getByRole('button', { name: 'Send announcement' }).click();
   await host.getByText('Sent to 2 rooms.', { exact: true }).waitFor();
   for (const page of [guest, ...otherGuests]) await page.getByText('Host announcement · Wrap up your discussion.', { exact: true }).waitFor();
+  await host.getByLabel('Return countdown').selectOption('15');
+  await host.getByRole('button', { name: 'Start return countdown' }).click();
+  await host.getByRole('timer').filter({ hasText: 'Rooms close in' }).waitFor();
+  for (const page of [guest, ...otherGuests]) await page.getByRole('timer').filter({ hasText: 'Returning in' }).waitFor();
   await host.locator('.call-side').screenshot({ path: resolve(results, 'meetrix-breakout-rooms.png') });
-  await host.getByRole('button', { name: 'Close all rooms', exact: true }).click();
   for (const page of [guest, ...otherGuests]) {
     await page.getByText('Returned to the main meeting. Your microphone and camera are off.', { exact: true }).waitFor();
   }
@@ -579,7 +625,7 @@ try {
   await delegate.getByRole('button', { name: 'Leave', exact: true }).click();
   await delegate.getByRole('button', { name: 'End for everyone' }).click();
   await guest.getByText('You are disconnected from this room.').waitFor();
-  console.log('Four-client meeting checks passed, including Hindi and Spanish captions, self-selected breakouts, annotations, and waiting room readmission.');
+  console.log('Four-client meeting checks passed for caption preferences and translation, breakout countdowns and selection, annotation and statistics exports, and waiting room readmission.');
 } finally {
   await browser?.close();
   backend?.stop();

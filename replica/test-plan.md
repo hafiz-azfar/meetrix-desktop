@@ -42,7 +42,7 @@
 | F28-N1 | Blocking the bundled model keeps the camera off. The host can switch the effect off and start the regular camera | Browser smoke test with an intercepted model request |
 | F29-H1 | The host hands off control to another attendee, who can caption and end the meeting after the former host leaves | API and four-client LiveKit smoke tests |
 | F30-H1 | The Windows picker supports cancelling or opting into display audio. Remote attendees receive audio, and stopping a share releases both tracks | Windows smoke and four-client LiveKit smoke tests |
-| F04-H2 | Daily, weekday, weekly and monthly schedules produce the previewed dates, and a new series exports distinct calendar events | Calendar unit and browser smoke tests |
+| F04-H2 | Daily, weekday, weekly and monthly schedules produce the previewed dates, custom intervals and up to 52 dates are supported, and each occurrence exports as a distinct calendar event | Calendar unit and browser smoke tests |
 | F18-H2 | A host assigns or revokes a manual caption typist, and a forged or stale caption grant is rejected | Caption protocol unit and four-client LiveKit smoke tests |
 | F31-H1 | A moderator moves an attendee to the waiting room, then readmits them with their camera and microphone off | API and four-client LiveKit smoke tests |
 | F32-H1 | A viewer sees the presenter’s drawn strokes and can draw only after the presenter grants access. Clearing removes the marks for both clients | Four-client LiveKit smoke test |
@@ -51,6 +51,10 @@
 | F17-H4 | An admitted attendee joins and switches self-select rooms, then returns to the main meeting with camera and microphone off | API and four-client LiveKit smoke tests |
 | F18-H3 | Windows audio produces English text offline, and a participant who opts in sends captions through the host | Windows speech smoke and four-client LiveKit smoke tests |
 | F18-H4 | A viewer translates English into Hindi or Spanish and exports the translation with the source caption | Four-client LiveKit smoke test and isolated browser and Windows model checks |
+| F17-H5 | A timed breakout returns attendees with camera and microphone off. Its deadline cannot be extended by a later close request. An attendee cannot schedule a close | API and four-client LiveKit smoke tests |
+| F18-H5 | A viewer’s caption size and contrast apply locally to the live overlay | Four-client LiveKit smoke test |
+| F32-H2 | A presenter draws shapes and text and exports a PNG. Attendees can see the marks and only the presenter gets the save control | Four-client LiveKit smoke test |
+| F33-H1 | An attendee exports active track metrics in JSON without participant identities or network data | Four-client LiveKit smoke test |
 | F12-P1 | 100-person load, 30-hour duration, and production availability | Deployment-scale verification |
 
 Run `npm test` for the API suite. The RTC tests use two isolated browser pages and a real loopback LiveKit server. The desktop test is aimed at the Windows development build.

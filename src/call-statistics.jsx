@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Track } from 'livekit-client';
+import { download } from './api.js';
 
 const sourceLabels = {
   [Track.Source.Microphone]: 'Microphone',
@@ -12,23 +13,33 @@ function readSample(report, direction) {
   if (!report) return null;
   const receiving = direction === 'Received';
   let stream;
-  let roundTrip;
+  let candidateRtt;
+  const remoteReports = new Map();
   for (const row of report.values()) {
     if (row.type === (receiving ? 'inbound-rtp' : 'outbound-rtp') && !row.isRemote) {
       const bytes = receiving ? row.bytesReceived : row.bytesSent;
       if (Number.isFinite(bytes) && (!stream || bytes > stream.bytes)) stream = { row, bytes };
     }
-    if ((row.type === 'candidate-pair' && row.nominated && row.state === 'succeeded') || row.type === 'remote-inbound-rtp') {
-      const seconds = row.currentRoundTripTime ?? row.roundTripTime;
-      if (Number.isFinite(seconds)) roundTrip = Math.round(seconds * 1000);
+    if (row.type === 'candidate-pair' && row.nominated && row.state === 'succeeded') {
+      candidateRtt = row.currentRoundTripTime;
+    }
+    if (!receiving && row.type === 'remote-inbound-rtp') {
+      if (row.localId) remoteReports.set(row.localId, row);
     }
   }
   if (!stream) return null;
   const { row, bytes } = stream;
+  const remote = receiving ? null : report.get(row.remoteId) ?? remoteReports.get(row.id);
+  const remoteRtt = remote?.type === 'remote-inbound-rtp' ? remote.roundTripTime : null;
+  const jitter = receiving ? row.jitter : remote?.jitter;
+  const millis = seconds => Number.isFinite(seconds) ? Math.round(seconds * 1000) : null;
+  const codec = report.get(row.codecId)?.mimeType;
   const packetsLost = Number.isFinite(row.packetsLost) ? Math.max(0, row.packetsLost) : null;
   const total = row.packetsReceived + packetsLost;
   return {
-    streamId: row.id, bytes, timestamp: row.timestamp, roundTrip,
+    streamId: row.id, bytes, timestamp: row.timestamp,
+    roundTrip: millis(remoteRtt ?? candidateRtt), jitter: millis(jitter),
+    codec: typeof codec === 'string' ? codec.split('/').at(-1) : null,
     loss: receiving && packetsLost != null && total > 0 ? 100 * packetsLost / total : null,
     resolution: row.frameWidth && row.frameHeight ? row.frameWidth + ' × ' + row.frameHeight : null,
     fps: Number.isFinite(row.framesPerSecond) ? Math.round(row.framesPerSecond) : null,
@@ -79,15 +90,27 @@ export function CallStatistics({ room, online }) {
     return () => { closed = true; clearTimeout(timer); };
   }, [room, online]);
 
+  function save() {
+    const tracks = samples.map(({ label, direction, rate, roundTrip, loss, jitter, resolution, fps, codec }) => ({
+      track: label, direction, bitrateKbps: rate, roundTripMs: roundTrip, packetLossPercent: loss,
+      jitterMs: jitter, resolution, framesPerSecond: fps, codec,
+    }));
+    download('meetrix-call-statistics.json',
+      JSON.stringify({ exportedAt: new Date().toISOString(), tracks }, null, 2), 'application/json');
+  }
+
   return <div className="call-statistics">
     <p className="muted">Live samples from one active track of each type and direction.</p>
+    {online && samples.length > 0 && <button type="button" className="button small" onClick={save}>Save call statistics</button>}
     {!online ? <p className="muted">Connection unavailable.</p> : samples.length === 0
       ? <p className="muted">Waiting for a camera, microphone, or screen share.</p>
-      : samples.map(({ key, direction, label, rate, roundTrip, loss, resolution, fps }) => <section key={key} className="stat-sample">
+      : samples.map(({ key, direction, label, rate, roundTrip, loss, jitter, resolution, fps, codec }) => <section key={key} className="stat-sample">
         <h3>{label} <small>{direction}</small></h3>
         <dl>
           <div><dt>Bitrate</dt><dd>{rate == null ? '—' : rate + ' kb/s'}</dd></div>
           <div><dt>Round trip</dt><dd>{roundTrip == null ? '—' : roundTrip + ' ms'}</dd></div>
+          {jitter != null && <div><dt>Jitter</dt><dd>{jitter} ms</dd></div>}
+          {codec && <div><dt>Codec</dt><dd>{codec}</dd></div>}
           {direction === 'Received' && <div><dt>Packet loss</dt><dd>{loss == null ? '—' : loss.toFixed(1) + '%'}</dd></div>}
           {resolution && <div><dt>Video</dt><dd>{resolution}{fps == null ? '' : ' at ' + fps + ' fps'}</dd></div>}
         </dl>

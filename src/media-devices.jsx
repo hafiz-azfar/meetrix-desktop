@@ -11,6 +11,7 @@ const defaults = {
   theme: 'light', meetingTimer: false, hideSelf: false, cameraOnly: false, showNames: true,
   confirmLeave: false, pauseIncomingCameras: false, shareFps: 0, shareHint: '', shareLayout: 'stacked',
   chatSize: 'standard', announceMessages: true, reducedMotion: false,
+  captionSize: 'standard', captionContrast: 'standard',
   shortcutsEnabled: true, shortcuts: defaultShortcuts,
 };
 const fields = [

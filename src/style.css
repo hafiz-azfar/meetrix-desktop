@@ -198,6 +198,10 @@
   .call-body { position: relative; display: flex; flex: 1; overflow: hidden; min-height: 0; }
   .stage-wrap { display: flex; flex-direction: column; position: relative; flex: 1; min-width: 0; }
   .caption-overlay { position: absolute; inset: auto 8px 16px; text-align: center; pointer-events: none; padding: 0 8px; }
+  .caption-overlay[data-size="large"] span { font-size: clamp(1.1rem, 2.4vw, 1.55rem); }
+  .caption-overlay[data-size="largest"] span { font-size: clamp(1.25rem, 3.2vw, 2rem); }
+  .caption-overlay[data-contrast="yellow"] span { color: var(--caption-yellow); background: var(--caption-black); }
+  .caption-overlay[data-contrast="light"] span { color: var(--caption-black); background: var(--caption-white); }
   .caption-overlay span { display: inline-block; max-width: min(100%, 650px); padding: 8px 14px; background: #111423; color: #fff; border-radius: 8px; font-size: clamp(.9rem, 1.8vw, 1.2rem); overflow-wrap: anywhere; }
   .stage { display: flex; align-items: stretch; justify-content: center; padding: 13px; gap: 11px; min-width: 0; flex: 1; overflow-y: auto; background: var(--stage); color: var(--stage-ink); }
   .stage .empty, .stage .empty strong, .stage .empty svg { color: var(--stage-muted); }
@@ -218,6 +222,7 @@
   .share-ink { position: absolute; pointer-events: none; }
   .share-ink[data-drawing="true"] { pointer-events: auto; cursor: crosshair; touch-action: none; }
   .share-annotation-tools { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; max-width: calc(100% - 18px); gap: 5px; position: absolute; right: 9px; top: 9px; }
+  .share-annotation-tools .annotation-field { min-height: 2rem; max-width: 14rem; padding: 0.25rem 0.5rem; }
   .share-annotation-tools:empty { display: none; }
   .share-annotation-tools .icon-button { background: var(--panel); }
   .share-annotation-tools .button[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); border-color: var(--accent-border); }

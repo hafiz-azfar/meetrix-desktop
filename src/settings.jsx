@@ -251,6 +251,16 @@ function AccessibilitySettings({ prefs, updatePrefs }) {
           <option value="standard">Standard</option><option value="large">Large</option><option value="largest">Extra large</option>
         </select>
       </label>
+      <label className="default-view">Caption text size
+        <select value={prefs.captionSize} onChange={event => updatePrefs({ captionSize: event.target.value })}>
+          <option value="standard">Standard</option><option value="large">Large</option><option value="largest">Extra large</option>
+        </select>
+      </label>
+      <label className="default-view">Caption contrast
+        <select value={prefs.captionContrast} onChange={event => updatePrefs({ captionContrast: event.target.value })}>
+          <option value="standard">White on dark</option><option value="yellow">Yellow on black</option><option value="light">Black on white</option>
+        </select>
+      </label>
       <label className="check"><input type="checkbox" checked={prefs.announceMessages}
         onChange={event => updatePrefs({ announceMessages: event.target.checked })} /> Announce new messages in the open chat panel</label>
       <label className="check"><input type="checkbox" checked={prefs.reducedMotion}

@@ -11,6 +11,7 @@ export function useRoomPlacement(api, initial) {
   const [ended, setEnded] = useState(false);
   const [waiting, setWaiting] = useState(false);
   const [breakoutChoices, setBreakoutChoices] = useState(initial.breakoutChoices ?? []);
+  const [breakoutClosesAt, setBreakoutClosesAt] = useState(initial.breakoutClosesAt ?? null);
   const hint = useRef(null);
   const refreshPlacement = useCallback(() => hint.current?.(), []);
   const updateRoles = useCallback(snapshot => {
@@ -51,10 +52,12 @@ export function useRoomPlacement(api, initial) {
         if (controller.signal.aborted) return;
         if (next.waiting) {
           setBreakoutChoices([]);
+          setBreakoutClosesAt(null);
           setWaiting(true);
           return;
         }
         setBreakoutChoices(next.breakoutChoices ?? []);
+        setBreakoutClosesAt(next.breakoutClosesAt ?? null);
         updateRoles(next);
         const readmission = next.placementEpoch > placementEpoch;
         if (next.token && (next.roomId !== roomId || readmission)) {
@@ -89,5 +92,5 @@ export function useRoomPlacement(api, initial) {
     };
   }, [api, roomId, routingKey, meeting.id, placementEpoch, waiting, ended, updateRoles]);
 
-  return { session, ended, waiting, roles, updateRoles, refreshPlacement, breakoutChoices, chooseBreakout };
+  return { session, ended, waiting, roles, updateRoles, refreshPlacement, breakoutChoices, breakoutClosesAt, chooseBreakout };
 }

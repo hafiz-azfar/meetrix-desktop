@@ -26,7 +26,7 @@ const schedule = z.object({
   name: person,
   startAt: z.iso.datetime().optional(),
   duration: duration.default(60),
-  additionalStarts: z.array(z.iso.datetime()).max(11).default([]),
+  additionalStarts: z.array(z.iso.datetime()).max(51).default([]),
   lobby: z.boolean().default(true),
   allowGuests: z.boolean().default(false),
   encrypted: z.boolean().default(false),
@@ -42,10 +42,11 @@ const routingRequest = z.object({
   breakoutRoomId: z.string().regex(/^breakout_[A-Za-z0-9_-]{16}$/).nullable().optional(),
 }).strict();
 const breakoutCommand = z.discriminatedUnion('action', [
-  z.object({ action: z.literal('open'), selfSelect: z.boolean().default(false), rooms: z.array(z.object({
+  z.object({ action: z.literal('open'), selfSelect: z.boolean().default(false),
+    durationSeconds: z.number().int().min(30).max(7200).optional(), rooms: z.array(z.object({
     name: z.string().trim().min(1).max(40), members: z.array(participantIdentity).max(99),
   }).strict()).min(1).max(8) }).strict(),
-  z.object({ action: z.literal('close') }).strict(),
+  z.object({ action: z.literal('close'), delaySeconds: z.number().int().min(1).max(120).optional() }).strict(),
   z.object({ action: z.literal('announce'), text: z.string().trim().min(1).max(300) }).strict(),
 ]);
 const placementTopic = 'meetrix.room-placement';
@@ -250,7 +251,9 @@ export function createApp(options, dependencies = {}) {
       }
       const roles = meetingRoles(current, target.roomId);
       const breakoutChoices = await availableBreakouts(current, identity);
-      const placement = { ...roles, placementEpoch, ...(breakoutChoices.length ? { breakoutChoices } : {}) };
+      const closesAt = target.breakoutName ? breakouts.closesAt(current.id) : null;
+      const placement = { ...roles, placementEpoch, ...(closesAt ? { breakoutClosesAt: closesAt } : {}),
+        ...(breakoutChoices.length ? { breakoutChoices } : {}) };
       if (target.roomId === input.roomId && placementEpoch === input.placementEpoch) {
         return { roomId: target.roomId, ...placement };
       }
@@ -471,7 +474,13 @@ export function createApp(options, dependencies = {}) {
     if (times.some((time, index) => index && time <= times[index - 1])) {
       throw new RequestError(400, 'Recurring meeting times must be in order.');
     }
-    const passcodes = input.passcode ? await Promise.all(times.map(() => encodePasscode(input.passcode))) : times.map(() => null);
+    const passcodes = times.map(() => null);
+    if (input.passcode) {
+      for (let offset = 0; offset < times.length; offset += 4) {
+        const batch = await Promise.all(times.slice(offset, offset + 4).map(() => encodePasscode(input.passcode)));
+        passcodes.splice(offset, batch.length, ...batch);
+      }
+    }
     const insert = db.prepare('INSERT INTO meetings(id, owner, owner_name, title, start_at, duration_minutes, created_at, lobby, allow_guests, passcode, encrypted) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
     const ids = times.map(() => randomBytes(12).toString('base64url'));
     db.exec('BEGIN IMMEDIATE');
@@ -537,9 +546,11 @@ export function createApp(options, dependencies = {}) {
       const token = await mediaToken(location.roomId, identity, name);
       const routingKey = current.encrypted ? undefined : breakouts.issueKey(current.id, identity);
       const breakoutChoices = await availableBreakouts(current, identity);
+      const closesAt = location.breakoutName ? breakouts.closesAt(current.id) : null;
       return { state: 'ready', serverUrl: livekitUrl, token, ...location, routingKey,
         cloudRecording: Boolean(cloud && cloud.available(current)),
         placementEpoch: attendance?.placement_epoch ?? 0, ...meetingRoles(current, location.roomId),
+        ...(closesAt ? { breakoutClosesAt: closesAt } : {}),
         ...(breakoutChoices.length ? { breakoutChoices } : {}),
         meeting: view(findMeeting.get(current.id), identity), accountless };
     });
@@ -592,8 +603,19 @@ export function createApp(options, dependencies = {}) {
     res.json({ guests, locked: !!meeting.locked, ...meetingRoles(findMeeting.get(meeting.id)) });
   });
 
+  async function finishBreakouts(meeting, actor) {
+    const existing = breakouts.list(meeting);
+    const selfSelect = breakouts.choices(meeting).length > 0;
+    if (breakouts.close(meeting)) log.run(meeting, actor, 'close-breakouts', null, Date.now());
+    await Promise.all([
+      ...existing.filter(room => room.members.length).map(room => signalPlacement(room.id, room.members)),
+      ...(selfSelect ? [signalPlacement(meeting)] : []),
+    ]);
+    await cleanupBreakouts(meeting);
+  }
+
   function breakoutView(meeting) {
-    return { selfSelect: breakouts.choices(meeting).length > 0, rooms: breakouts.list(meeting).map(({ id, name, members }) => ({
+    return { closesAt: breakouts.closesAt(meeting), selfSelect: breakouts.choices(meeting).length > 0, rooms: breakouts.list(meeting).map(({ id, name, members }) => ({
       id, name, members: members.map(identity => findGuest.get(meeting, identity))
         .filter(guest => guest?.decision === 'admitted').map(({ identity, name }) => ({ identity, name })),
     })) };
@@ -627,13 +649,10 @@ export function createApp(options, dependencies = {}) {
         return { ...breakoutView(current.id), delivered };
       }
       if (command.action === 'close') {
-        const selfSelect = breakouts.choices(current.id).length > 0;
-        if (breakouts.close(current.id)) log.run(current.id, req.identity, 'close-breakouts', null, Date.now());
-        await Promise.all([
-          ...existing.filter(room => room.members.length).map(room => signalPlacement(room.id, room.members)),
-          ...(selfSelect ? [signalPlacement(current.id)] : []),
-        ]);
-        await cleanupBreakouts(current.id);
+        if (command.delaySeconds && existing.length) {
+          breakouts.scheduleClose(current.id, Date.now() + command.delaySeconds * 1000);
+          await Promise.all(existing.filter(room => room.members.length).map(room => signalPlacement(room.id, room.members)));
+        } else await finishBreakouts(current.id, req.identity);
       } else {
         if (!rooms) throw new RequestError(503, 'This server needs LiveKit configuration.');
         if (existing.length) throw new RequestError(409, 'Close the current breakout rooms before opening another set.');
@@ -650,7 +669,8 @@ export function createApp(options, dependencies = {}) {
           }
         }
         await cloud?.stopMeeting(current, 'Breakout rooms opened.');
-        breakouts.open(current.id, command.rooms, command.selfSelect);
+        const closesAt = command.durationSeconds ? Date.now() + command.durationSeconds * 1000 : null;
+        breakouts.open(current.id, command.rooms, command.selfSelect, closesAt);
         log.run(current.id, req.identity, 'open-breakouts', null, Date.now());
         await signalPlacement(current.id, command.selfSelect ? undefined : identities);
       }
@@ -935,6 +955,22 @@ export function createApp(options, dependencies = {}) {
     }
   }, 30000);
   timer.unref();
+  let closingBreakouts = false;
+  const breakoutTimer = setInterval(async () => {
+    if (closingBreakouts) return;
+    const due = breakouts.due(Date.now());
+    if (!due.length) return;
+    closingBreakouts = true;
+    try {
+      await Promise.allSettled(due.map(({ meeting }) => serial(meeting, () => {
+        const closesAt = breakouts.closesAt(meeting);
+        if (closesAt != null && closesAt <= Date.now()) {
+          return finishBreakouts(meeting, activeHost(findMeeting.get(meeting)));
+        }
+      })));
+    } finally { closingBreakouts = false; }
+  }, 1000);
+  breakoutTimer.unref();
   let reconcilingCloud = false;
   const recordingTimer = cloud && setInterval(async () => {
     if (reconcilingCloud) return;
@@ -945,5 +981,5 @@ export function createApp(options, dependencies = {}) {
     } finally { reconcilingCloud = false; }
   }, 5000);
   recordingTimer?.unref();
-  return { app, close() { clearInterval(timer); clearInterval(recordingTimer); cloudStorage?.close?.(); db.close(); } };
+  return { app, close() { clearInterval(timer); clearInterval(breakoutTimer); clearInterval(recordingTimer); cloudStorage?.close?.(); db.close(); } };
 }

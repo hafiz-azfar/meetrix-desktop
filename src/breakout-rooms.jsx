@@ -1,10 +1,29 @@
 import React, { useEffect, useState } from 'react';
 import { Hourglass, Plus, Send, Shuffle, UserMinus, X } from 'lucide-react';
 
+export function BreakoutCountdown({ closesAt, label = 'Returning in' }) {
+  if (!closesAt) return null;
+  return <BreakoutClock key={closesAt} closesAt={closesAt} label={label} />;
+}
+
+function BreakoutClock({ closesAt, label }) {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(interval);
+  }, []);
+  const remaining = Math.max(0, Math.ceil((closesAt - now) / 1000));
+  const minutes = Math.floor(remaining / 60);
+  return <span className="breakout-indicator" role="timer">{label} {minutes}:{String(remaining % 60).padStart(2, '0')}</span>;
+}
+
 export function BreakoutRooms({ api, meetingId, participants, moveToWaitingRoom, removeParticipant }) {
   const [active, setActive] = useState(null);
   const [openSelection, setOpenSelection] = useState(false);
   const [selfSelect, setSelfSelect] = useState(false);
+  const [closesAt, setClosesAt] = useState(null);
+  const [duration, setDuration] = useState('');
+  const [closeDelay, setCloseDelay] = useState('30');
   const [names, setNames] = useState(['Room 1', 'Room 2']);
   const [assignments, setAssignments] = useState({});
   const [pending, setPending] = useState(false);
@@ -24,6 +43,7 @@ export function BreakoutRooms({ api, meetingId, participants, moveToWaitingRoom,
         const result = await api(path, { signal: controller.signal });
         if (controller.signal.aborted) return;
         setActive(result.rooms);
+        setClosesAt(result.closesAt);
         setOpenSelection(result.selfSelect === true);
       } catch (failure) {
         if (!controller.signal.aborted) setError(failure.message);
@@ -49,6 +69,7 @@ export function BreakoutRooms({ api, meetingId, participants, moveToWaitingRoom,
     try {
       const result = await api(path, { method: 'POST', body: command });
       setActive(result.rooms);
+      setClosesAt(result.closesAt);
       setOpenSelection(result.selfSelect === true);
       if (command.action === 'announce') {
         setAnnouncement('');
@@ -80,6 +101,7 @@ export function BreakoutRooms({ api, meetingId, participants, moveToWaitingRoom,
       setRetry(value => value + 1);
     }}>Retry</button> : <p className="muted" role="status">Loading breakout rooms…</p>
     : active.length ? <>
+      <BreakoutCountdown closesAt={closesAt} label="Rooms close in" />
       <p className="muted">{openSelection ? 'Attendees can choose their own rooms.' : 'Assigned participants move to their rooms.'}</p>
       {active.map(room => <section className="breakout-room" key={room.id || room.name}>
         <h3>{room.name}</h3>
@@ -100,12 +122,22 @@ export function BreakoutRooms({ api, meetingId, participants, moveToWaitingRoom,
         </label>
         <button className="button" disabled={pending || !announcement.trim()}><Send size={15} /> Send announcement</button>
       </form>
+      <div className="breakout-actions">
+        <label>Return countdown
+          <select value={closeDelay} onChange={event => setCloseDelay(event.target.value)}>
+            {[15, 30, 60].map(seconds => <option value={seconds} key={seconds}>{seconds} seconds</option>)}
+          </select>
+        </label>
+        <button type="button" className="button small" disabled={pending} onClick={() => submit({ action: 'close', delaySeconds: Number(closeDelay) })}>
+          Start return countdown
+        </button>
+      </div>
       <button className="button primary" disabled={pending} onClick={() => submit({ action: 'close' })}>
         Close all rooms
       </button>
     </> : <form className="form" onSubmit={event => {
       event.preventDefault();
-      submit({ action: 'open', selfSelect, rooms: names.map((name, index) => ({
+      submit({ action: 'open', selfSelect, durationSeconds: duration ? Number(duration) * 60 : undefined, rooms: names.map((name, index) => ({
         name, members: attendees.filter(person => assignments[person.identity] === index).map(person => person.identity),
       })) });
     }}>
@@ -130,6 +162,10 @@ export function BreakoutRooms({ api, meetingId, participants, moveToWaitingRoom,
       </div>
       <label className="check"><input type="checkbox" checked={selfSelect} disabled={pending}
         onChange={event => setSelfSelect(event.target.checked)} /> Let attendees choose their room</label>
+      <label>Close automatically after (minutes)
+        <input type="number" min="1" max="120" step="1" value={duration} placeholder="No time limit"
+          disabled={pending} onChange={event => setDuration(event.target.value)} />
+      </label>
       {!attendees.length && !selfSelect && <p className="muted">Admit participants before opening breakout rooms.</p>}
       {attendees.map(person => <label key={person.identity}>{person.name || 'Guest'}
         <select aria-label={'Assign ' + (person.name || 'Guest')} value={assignments[person.identity] ?? ''} disabled={pending}

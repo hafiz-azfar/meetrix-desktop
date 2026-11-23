@@ -183,11 +183,11 @@ export function useManualCaptions(room, { enabled, hostIdentity, hostVersion = 0
   return { entries, current, visible, setVisible, send, captioners, selected, canType, assignCaptioner, automatic, translation };
 }
 
-export function CaptionsOverlay({ captions }) {
+export function CaptionsOverlay({ captions, prefs }) {
   if (!captions.visible || !captions.current) return null;
   const { id, line, speaker } = captions.current;
   const translated = captions.translation.results[id];
-  return <div className="caption-overlay" role="status"><span>{speaker && <strong>{speaker} · </strong>}
+  return <div className="caption-overlay" data-size={prefs.captionSize} data-contrast={prefs.captionContrast} role="status"><span>{speaker && <strong>{speaker} · </strong>}
     {translated ? <bdi lang={captions.translation.language}>{translated}</bdi> : line}</span></div>;
 }
 

@@ -19,7 +19,7 @@ import { applyCameraBackground, CameraBackgroundFields } from './camera-backgrou
 import { CallViewOptions } from './settings.jsx';
 import { CallStatistics } from './call-statistics.jsx';
 import { shortcutFor } from './shortcuts.js';
-import { BreakoutRooms, ChooseBreakoutRoom } from './breakout-rooms.jsx';
+import { BreakoutCountdown, BreakoutRooms, ChooseBreakoutRoom } from './breakout-rooms.jsx';
 import { CaptionsOverlay, CaptionsPanel, useManualCaptions } from './meeting-captions.jsx';
 import { RecordingBanner, RecordingPanel, useMeetingRecording } from './meeting-recording.jsx';
 import { hostRolesTopic, placementTopic, useRoomPlacement } from './room-placement.js';
@@ -56,10 +56,10 @@ export function Conference({ session, api, prefs, updatePrefs, onLeave }) {
   return <ConferenceConnection key={placement.session.roomId + ':' + (placement.session.placementEpoch ?? 0)} session={placement.session} api={api}
     prefs={prefs} updatePrefs={updatePrefs} onLeave={onLeave} roles={placement.roles}
     updateRoles={placement.updateRoles} refreshPlacement={placement.refreshPlacement}
-    breakoutChoices={placement.breakoutChoices} chooseBreakout={placement.chooseBreakout} />;
+    breakoutChoices={placement.breakoutChoices} breakoutClosesAt={placement.breakoutClosesAt} chooseBreakout={placement.chooseBreakout} />;
 }
 
-function ConferenceConnection({ session, api, prefs, updatePrefs, onLeave, roles, updateRoles, refreshPlacement, breakoutChoices, chooseBreakout }) {
+function ConferenceConnection({ session, api, prefs, updatePrefs, onLeave, roles, updateRoles, refreshPlacement, breakoutChoices, breakoutClosesAt, chooseBreakout }) {
   const [error, setError] = useState('');
   const [secureRoom, setSecureRoom] = useState(null);
   useEffect(() => {
@@ -79,7 +79,7 @@ function ConferenceConnection({ session, api, prefs, updatePrefs, onLeave, roles
     options={secureRoom ? undefined : videoOptions} onError={error => setError(error.message || 'Could not connect to the room.')}>
     <Call session={session} api={api} prefs={prefs} updatePrefs={updatePrefs} onLeave={onLeave}
       connectionError={error} roles={roles} updateRoles={updateRoles} refreshPlacement={refreshPlacement}
-      breakoutChoices={breakoutChoices} chooseBreakout={chooseBreakout} />
+      breakoutChoices={breakoutChoices} breakoutClosesAt={breakoutClosesAt} chooseBreakout={chooseBreakout} />
     <RoomAudioRenderer volume={prefs.speakerVolume} />
   </LiveKitRoom>;
 }
@@ -112,7 +112,7 @@ function ElapsedTime({ joinedAt }) {
   return <time title="Time connected" className="call-timer">{hours ? hours + ':' : ''}{minutes}:{seconds}</time>;
 }
 
-function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, roles, updateRoles, refreshPlacement, breakoutChoices, chooseBreakout }) {
+function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, roles, updateRoles, refreshPlacement, breakoutChoices, breakoutClosesAt, chooseBreakout }) {
   const room = useRoomContext();
   const connection = useConnectionState();
   const { localParticipant, isCameraEnabled, isMicrophoneEnabled, isScreenShareEnabled } = useLocalParticipant();
@@ -497,6 +497,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, role
     <header className="call-header"><Logo /><div className="call-title"><strong>{session.meeting.title}</strong><span><i className="status-dot" />{ended ? 'Disconnected' : online ? 'Connected' : connection === ConnectionState.Reconnecting ? 'Reconnecting' : 'Connecting'}
       {online && prefs.meetingTimer && joinedAt && <ElapsedTime joinedAt={joinedAt} />}
     </span>{session.breakoutName && <span className="breakout-indicator">Breakout · {session.breakoutName}</span>}
+      {session.breakoutName && <BreakoutCountdown closesAt={breakoutClosesAt} />}
       {coHost && <span className="breakout-indicator" role="status">You’re a co-host</span>}
       {online && host && hostVersion > 0 && <span className="breakout-indicator" role="status">You’re the host</span>}</div>
       <div className="call-header-actions">
@@ -533,7 +534,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, role
             role={roleOf(participant)} raised={hands[participant.identity]} mirror={prefs.mirrorCamera}
             showNames={prefs.showNames} pauseCamera={prefs.pauseIncomingCameras && !participant.isLocal} />)}
         </div>
-      </section>{meetingTools && !ended && <CaptionsOverlay captions={captions} />}</div>
+      </section>{meetingTools && !ended && <CaptionsOverlay captions={captions} prefs={prefs} />}</div>
       {panel && <aside className="call-side"><div className="dialog-head"><h2>{panelTitles[panel]}</h2><button className="icon-button" aria-label="Close panel" onClick={() => setPanel('')}><X size={18} /></button></div>
         {panel === 'people' && <>
           {canModerate && <div className="host-actions">

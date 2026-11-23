@@ -108,6 +108,11 @@ export function openDatabase(filename) {
     CREATE TABLE IF NOT EXISTS breakout_choice_sets (
       meeting TEXT PRIMARY KEY REFERENCES meetings(id)
     ) STRICT;
+    CREATE TABLE IF NOT EXISTS breakout_deadlines (
+      meeting TEXT PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,
+      closes_at INTEGER NOT NULL
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS breakout_deadlines_by_time ON breakout_deadlines(closes_at);
     CREATE TABLE IF NOT EXISTS breakout_members (
       room TEXT NOT NULL REFERENCES breakout_rooms(id) ON DELETE CASCADE,
       identity TEXT NOT NULL,
