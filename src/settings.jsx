@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Accessibility, AudioLines, Keyboard, Mic, MonitorUp, Palette, SlidersHorizontal, Video, Volume2 } from 'lucide-react';
 import { CameraPreview, DeviceFields, microphoneOptions, SpeakerVolume } from './media-devices.jsx';
+import { CameraBackgroundFields } from './camera-background.jsx';
 import { defaultShortcuts, meetingShortcuts } from './shortcuts.js';
 
 const sections = [
@@ -179,7 +180,8 @@ function VideoSettings({ prefs, updatePrefs }) {
   return <>
     <h2 id="settings-section">Video</h2>
     <div className="settings-card video-settings">
-      <CameraPreview enabled={preview} deviceId={prefs.cameraId} mirror={prefs.mirrorCamera} />
+      <CameraPreview enabled={preview} deviceId={prefs.cameraId} mirror={prefs.mirrorCamera}
+        background={prefs.background} backgroundImage={prefs.backgroundImage} />
       <div className="settings-options">
         <button className="button small" onClick={() => setPreview(!preview)}>{preview ? 'Stop preview' : 'Start camera preview'}</button>
         <label className="check"><input type="checkbox" checked={prefs.mirrorCamera}
@@ -187,6 +189,7 @@ function VideoSettings({ prefs, updatePrefs }) {
       </div>
       <DeviceFields kinds={['videoinput']} prefs={prefs} inCall={preview}
         changeDevice={({ key }, value) => updatePrefs({ [key + 'Id']: value })} />
+      <CameraBackgroundFields prefs={prefs} onChange={updatePrefs} />
     </div>
   </>;
 }

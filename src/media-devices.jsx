@@ -1,11 +1,13 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Mic, Video, VideoOff, Volume2 } from 'lucide-react';
 import { defaultShortcuts } from './shortcuts.js';
+import { validBackgroundImage } from './camera-background.jsx';
 
 const storageKey = 'meetrix-devices';
 const defaults = {
   camera: false, microphone: false, cameraId: '', microphoneId: '', speakerId: '',
   mirrorCamera: true, reduceNoise: true, speakerVolume: 1, layout: 'grid',
+  background: 'off', backgroundImage: '',
   theme: 'light', meetingTimer: false, hideSelf: false, cameraOnly: false, showNames: true,
   confirmLeave: false, pauseIncomingCameras: false, shareFps: 0, shareHint: '', shareLayout: 'stacked',
   chatSize: 'standard', announceMessages: true, reducedMotion: false,
@@ -21,7 +23,9 @@ export function useDevicePreferences() {
   const [prefs, setPrefs] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem(storageKey) || '{}') ?? {};
-      return { ...defaults, ...saved, shortcuts: { ...defaultShortcuts, ...saved.shortcuts } };
+      const backgroundImage = validBackgroundImage(saved.backgroundImage) ? saved.backgroundImage : '';
+      const background = saved.background === 'blur' || (saved.background === 'image' && backgroundImage) ? saved.background : 'off';
+      return { ...defaults, ...saved, background, backgroundImage, shortcuts: { ...defaultShortcuts, ...saved.shortcuts } };
     }
     catch { return defaults; }
   });
@@ -40,29 +44,45 @@ export function microphoneOptions(prefs) {
   return { ...captureOptions(prefs.microphoneId), noiseSuppression: prefs.reduceNoise };
 }
 
-export function CameraPreview({ enabled, deviceId, mirror = true }) {
+export function CameraPreview({ enabled, deviceId, mirror = true, background = 'off', backgroundImage = '' }) {
   const [status, setStatus] = useState('');
   const video = useRef(null);
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;
     let stream;
+    let processor;
     const element = video.current;
     setStatus('Starting camera…');
     Promise.resolve().then(() => navigator.mediaDevices.getUserMedia({ video: captureOptions(deviceId) }))
-      .then(result => {
+      .then(async result => {
         if (cancelled) { result.getTracks().forEach(track => track.stop()); return; }
         stream = result;
-        element.srcObject = result;
+        if (background === 'off') element.srcObject = result;
+        else {
+          setStatus('Preparing camera background…');
+          const { BackgroundProcessor } = await import('./background-processor.js');
+          if (cancelled) return;
+          processor = new BackgroundProcessor(background, backgroundImage, message => {
+            if (!cancelled) setStatus(message);
+          });
+          await processor.init({ track: result.getVideoTracks()[0] });
+          if (cancelled) return;
+          element.srcObject = new MediaStream([processor.processedTrack]);
+        }
         setStatus('');
       })
-      .catch(() => { if (!cancelled) setStatus('Camera unavailable'); });
+      .catch(() => {
+        stream?.getTracks().forEach(track => track.stop());
+        if (!cancelled) setStatus(background === 'off' ? 'Camera unavailable' : 'Camera preview with this background is unavailable.');
+      });
     return () => {
       cancelled = true;
       element.srcObject = null;
+      void processor?.destroy();
       stream?.getTracks().forEach(track => track.stop());
     };
-  }, [deviceId, enabled]);
+  }, [deviceId, enabled, background, backgroundImage]);
   return <div className="preview">
     <video className={mirror ? 'mirrored-video' : undefined} ref={video} autoPlay playsInline muted />
     {(!enabled || status) && <div className="preview-empty" role="status"><VideoOff size={26} />

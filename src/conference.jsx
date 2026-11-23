@@ -3,7 +3,7 @@ import {
   LiveKitRoom, RoomAudioRenderer, StartAudio, VideoTrack, useConnectionState,
   useLocalParticipant, useParticipants, useRoomContext, useTracks,
 } from '@livekit/components-react';
-import { ConnectionState, RoomEvent, ScreenSharePresets, Track } from 'livekit-client';
+import { ConnectionState, createLocalVideoTrack, RoomEvent, ScreenSharePresets, Track } from 'livekit-client';
 import { createEncryptedRoom } from './encrypted-room.js';
 import {
   Captions, ChartNoAxesColumn, CircleDot, Clipboard, FileText, Grid2X2, Hand, Lock, LockOpen, MessageSquare, Mic, MicOff, MonitorUp, SmilePlus,
@@ -15,6 +15,7 @@ import { Polls } from './polls.jsx';
 import { Whiteboard } from './whiteboard.jsx';
 import { Dialog, Logo } from './ui.jsx';
 import { captureOptions, DeviceFields, microphoneOptions, SpeakerVolume } from './media-devices.jsx';
+import { applyCameraBackground, CameraBackgroundFields } from './camera-background.jsx';
 import { CallViewOptions } from './settings.jsx';
 import { CallStatistics } from './call-statistics.jsx';
 import { shortcutFor } from './shortcuts.js';
@@ -115,6 +116,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, coHo
   const [confirmation, setConfirmation] = useState(false);
   const [microphoneRequest, setMicrophoneRequest] = useState(false);
   const [settings, setSettings] = useState(false);
+  const [cameraBusy, setCameraBusy] = useState(false);
   const [viewOptions, setViewOptions] = useState(false);
   const [fullscreen, setFullscreen] = useState(Boolean(document.fullscreenElement));
   const [exiting, setExiting] = useState(false);
@@ -129,6 +131,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, coHo
   const [reaction, setReaction] = useState(null);
   const [typed, setTyped] = useState('');
   const didInitialize = useRef(false);
+  const changingCamera = useRef(false);
   const chartEnd = useRef(null);
   const id = session.meeting.id;
   const host = session.meeting.isHost;
@@ -159,9 +162,12 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, coHo
       const media = session.media ?? prefs;
       const results = await Promise.allSettled([
         media.microphone ? localParticipant.setMicrophoneEnabled(true, microphoneOptions(prefs)) : null,
-        media.camera ? localParticipant.setCameraEnabled(true, captureOptions(prefs.cameraId)) : null,
+        media.camera ? withCamera(() => setCamera(true)) : null,
         prefs.speakerId ? room.switchActiveDevice('audiooutput', prefs.speakerId) : null,
       ]);
+      if (results[1].status === 'rejected' && prefs.background !== 'off') {
+        throw new Error('The camera stayed off because its background could not be started.');
+      }
       if (results.some(result => result.status === 'rejected')) throw new Error('One or more selected devices could not be started.');
     });
   }, [online, localParticipant, prefs, room, session.media]);
@@ -309,6 +315,11 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, coHo
   }
 
   async function changeDevice({ key, kind }, deviceId) {
+    if (key === 'camera') return withCamera(() => switchDevice(key, kind, deviceId));
+    return switchDevice(key, kind, deviceId);
+  }
+
+  async function switchDevice(key, kind, deviceId) {
     let roomDevice = deviceId;
     if (!roomDevice && kind !== 'audiooutput') {
       const devices = (await navigator.mediaDevices.enumerateDevices()).filter(device => device.kind === kind);
@@ -333,7 +344,48 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, coHo
   }
 
   function toggleCamera() {
-    return run(() => localParticipant.setCameraEnabled(!isCameraEnabled, captureOptions(prefs.cameraId)));
+    if (changingCamera.current) return;
+    return run(() => withCamera(() => setCamera(!isCameraEnabled)));
+  }
+
+  async function withCamera(operation) {
+    if (changingCamera.current) throw new Error('The camera is already updating. Try again in a moment.');
+    changingCamera.current = true;
+    setCameraBusy(true);
+    try { return await operation(); }
+    finally { changingCamera.current = false; setCameraBusy(false); }
+  }
+
+  async function setCamera(enabled) {
+    const existing = localParticipant.getTrackPublication(Track.Source.Camera)?.track;
+    if (!enabled && existing?.getProcessor()) {
+      await localParticipant.unpublishTrack(existing, true);
+      return;
+    }
+    if (!enabled || existing || prefs.background === 'off') {
+      await localParticipant.setCameraEnabled(enabled, captureOptions(prefs.cameraId));
+      return;
+    }
+    const track = await createLocalVideoTrack(captureOptions(prefs.cameraId));
+    try {
+      await applyCameraBackground(track, prefs, setError);
+      if (room.state !== ConnectionState.Connected) throw new Error('The meeting connection was interrupted.');
+      await localParticipant.publishTrack(track, { source: Track.Source.Camera });
+    } catch (failure) {
+      track.stop();
+      throw new Error('The camera stayed off because its background could not be started.', { cause: failure });
+    }
+  }
+
+  function changeBackground(changes) {
+    return withCamera(async () => {
+      const publication = localParticipant.getTrackPublication(Track.Source.Camera);
+      if (publication?.track) {
+        if (publication.isMuted) await localParticipant.unpublishTrack(publication.track, true);
+        else await applyCameraBackground(publication.track, { ...prefs, ...changes }, setError);
+      }
+      updatePrefs(changes);
+    });
   }
 
   function toggleShare() {
@@ -471,7 +523,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, coHo
     <footer className="call-toolbar">
       <StartAudio label="Enable audio" className="button" />
       <button className="call-control" disabled={!online} aria-pressed={isMicrophoneEnabled} onClick={toggleMicrophone}>{isMicrophoneEnabled ? <Mic size={20} /> : <MicOff size={20} />}<span>{isMicrophoneEnabled ? 'Mute' : 'Unmute'}</span></button>
-      <button className="call-control" disabled={!online} aria-pressed={isCameraEnabled} onClick={toggleCamera}>{isCameraEnabled ? <Video size={20} /> : <VideoOff size={20} />}<span>Camera</span></button>
+      <button className="call-control" disabled={!online || cameraBusy} aria-pressed={isCameraEnabled} onClick={toggleCamera}>{isCameraEnabled ? <Video size={20} /> : <VideoOff size={20} />}<span>Camera</span></button>
       <button className="call-control" disabled={!online} aria-pressed={isScreenShareEnabled} onClick={toggleShare}><MonitorUp size={20} /><span>{isScreenShareEnabled ? 'Stop share' : 'Share'}</span></button>
       <button className="call-control" aria-pressed={panel === 'people'} onClick={() => togglePanel('people')}><Users size={20} /><span>People {participants.length + (canModerate ? guests.length : 0)}</span></button>
       <button className="call-control" aria-pressed={panel === 'chat'} onClick={() => togglePanel('chat')}><MessageSquare size={20} /><span>Chat</span></button>
@@ -493,6 +545,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, coHo
     {settings && <Dialog title="Audio and video devices" close={() => setSettings(false)}>
       <DeviceFields prefs={prefs} changeDevice={changeDevice} inCall />
       <SpeakerVolume prefs={prefs} updatePrefs={updatePrefs} />
+      <CameraBackgroundFields prefs={prefs} onChange={changeBackground} />
       <div className="dialog-actions"><button className="button primary" onClick={() => setSettings(false)}>Done</button></div>
     </Dialog>}
     {viewOptions && <Dialog title="View preferences" close={() => setViewOptions(false)}>

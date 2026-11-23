@@ -7,6 +7,19 @@ import { startLocal } from '../desktop/local.cjs';
 const results = resolve('test-results');
 await mkdir(results, { recursive: true });
 const directory = await mkdtemp(resolve(results, 'guest-meeting-'));
+async function waitForCameraColor(page, selector, color) {
+  await page.waitForFunction(({ selector, color }) => {
+    const video = document.querySelector(selector);
+    if (video?.readyState < 2 || !video?.videoWidth) return false;
+    const canvas = document.createElement('canvas');
+    canvas.width = 1;
+    canvas.height = 1;
+    const context = canvas.getContext('2d');
+    context.drawImage(video, video.videoWidth * 0.14, video.videoHeight * 0.28, 8, 8, 0, 0, 1, 1);
+    const [red, green, blue] = context.getImageData(0, 0, 1, 1).data;
+    return color === 'pink' ? red > 160 && blue > 100 && green < 100 : green > 110 && red < 115;
+  }, { selector, color });
+}
 let backend;
 let browser;
 try {
@@ -74,6 +87,23 @@ try {
   const track = await host.locator('.video-settings video').evaluateHandle(video => video.srcObject.getVideoTracks()[0]);
   await host.getByLabel('Mirror my local view').uncheck();
   assert.equal(await host.locator('.video-settings video').evaluate(video => getComputedStyle(video).transform), 'none');
+  const magenta = await host.evaluate(() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 320;
+    canvas.height = 240;
+    const context = canvas.getContext('2d');
+    context.fillStyle = '#ed2198';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL('image/png').split(',')[1];
+  });
+  await host.getByLabel('Camera background', { exact: true }).selectOption('blur');
+  await host.waitForFunction(() => document.querySelector('.video-settings video')?.srcObject?.getVideoTracks()[0]?.constructor.name === 'CanvasCaptureMediaStreamTrack');
+  await waitForCameraColor(host, '.video-settings video', 'green');
+  await host.getByLabel('Choose background image', { exact: true }).setInputFiles({
+    name: 'pink.png', mimeType: 'image/png', buffer: Buffer.from(magenta, 'base64'),
+  });
+  await waitForCameraColor(host, '.video-settings video', 'pink');
+  await host.screenshot({ path: resolve(results, 'meetrix-camera-background.png') });
   await host.getByRole('button', { name: 'Meeting defaults' }).click();
   assert.equal(await track.evaluate(videoTrack => videoTrack.readyState), 'ended');
   await track.dispose();
@@ -89,6 +119,7 @@ try {
   await host.getByRole('button', { name: 'Settings', exact: true }).click();
   assert.equal(await host.evaluate(() => getComputedStyle(document.documentElement).colorScheme), 'dark');
   assert.equal(await host.evaluate(() => JSON.parse(localStorage.getItem('meetrix-devices')).meetingTimer), true);
+  assert.equal(await host.evaluate(() => JSON.parse(localStorage.getItem('meetrix-devices')).background), 'image');
   await host.getByRole('button', { name: 'Appearance' }).click();
   await host.getByLabel('App theme').selectOption('light');
   await host.getByRole('button', { name: 'Accessibility', exact: true }).click();
@@ -116,7 +147,7 @@ try {
   await host.getByLabel('Allow guests without an account').check();
   await host.getByRole('button', { name: 'Continue', exact: true }).click();
   await host.getByRole('button', { name: 'Camera off' }).click();
-  await host.waitForFunction(() => document.querySelector('.preview video')?.readyState >= 2);
+  await waitForCameraColor(host, '.preview video', 'pink');
   await host.getByRole('button', { name: 'Enter room' }).click();
   await host.getByRole('button', { name: 'Devices', exact: true }).waitFor();
   await host.getByRole('button', { name: 'Gallery', exact: true }).waitFor();
@@ -142,7 +173,7 @@ try {
   await host.getByText('Unverified guest', { exact: true }).waitFor();
   await host.getByRole('button', { name: 'Admit', exact: true }).click();
   await guest.getByRole('button', { name: 'Devices', exact: true }).waitFor();
-  await guest.waitForFunction(() => Array.from(document.querySelectorAll('.stage video')).some(video => video.readyState >= 2));
+  await waitForCameraColor(guest, '.stage video', 'pink');
   assert.equal((await guest.request.get(origin + '/api/meetings/' + id + '/notes')).status(), 401);
   await host.getByRole('button', { name: 'Fullscreen', exact: true }).click();
   await host.waitForFunction(() => document.fullscreenElement === document.documentElement);
@@ -150,6 +181,24 @@ try {
   await host.waitForFunction(() => document.fullscreenElement === null);
 
   const cameraToggle = host.getByRole('button', { name: 'Camera', exact: true });
+  await host.getByRole('button', { name: 'Devices', exact: true }).click();
+  await host.getByLabel('Camera background', { exact: true }).selectOption('blur');
+  await host.getByRole('button', { name: 'Done', exact: true }).click();
+  await waitForCameraColor(guest, '.stage video', 'green');
+  await cameraToggle.click();
+  await guest.locator('.stage video').waitFor({ state: 'detached' });
+  const modelRoute = '**/camera-model/selfie_segmenter_landscape.tflite';
+  await host.route(modelRoute, request => request.abort());
+  await cameraToggle.click();
+  await host.getByText('The camera stayed off because its background could not be started.').waitFor();
+  assert.equal(await cameraToggle.getAttribute('aria-pressed'), 'false');
+  assert.equal(await guest.locator('.stage video').count(), 0);
+  await host.unroute(modelRoute);
+  await host.getByRole('button', { name: 'Devices', exact: true }).click();
+  await host.getByLabel('Camera background', { exact: true }).selectOption('off');
+  await host.getByRole('button', { name: 'Done', exact: true }).click();
+  await cameraToggle.click();
+  await waitForCameraColor(guest, '.stage video', 'green');
   await host.getByRole('button', { name: 'Chat', exact: true }).click();
   await host.getByRole('textbox', { name: 'Message', exact: true }).focus();
   assert.equal(await host.locator('.chat-log').getAttribute('aria-live'), 'off');
@@ -355,7 +404,7 @@ try {
   await host.getByRole('button', { name: 'Leave', exact: true }).click();
   await host.getByRole('button', { name: 'End for everyone' }).click();
   await guest.getByText('You are disconnected from this room.').waitFor();
-  console.log('Meeting settings, four-client breakouts, caption export, consent-gated recording, and live co-host grant and revocation checks passed.');
+  console.log('Meeting settings, private camera backgrounds, four-client breakouts, caption export, consent-gated recording, and live co-host checks passed.');
 } finally {
   await browser?.close();
   backend?.stop();

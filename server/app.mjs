@@ -143,7 +143,7 @@ export function createApp(options, dependencies = {}) {
     referrerPolicy: { policy: 'no-referrer' },
     contentSecurityPolicy: { directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'"],
+      scriptSrc: ["'self'", "'wasm-unsafe-eval'"],
       connectSrc: ["'self'", ...(mediaOrigin ? [mediaOrigin, mediaOrigin.replace(/^ws/, 'http')] : [])],
       imgSrc: ["'self'", 'data:', 'blob:'],
       styleSrc: ["'self'", "'unsafe-inline'"],

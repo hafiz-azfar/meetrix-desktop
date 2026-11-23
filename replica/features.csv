@@ -26,3 +26,4 @@ F24,Meetings,Local meeting recording,should,yes,yes,Host WebM recording with per
 F25,Meetings,Co-host participant management,should,yes,yes,Connection-bound delegation for moderation and breakouts in standard rooms
 F26,Meetings,Mute all attendees,should,yes,yes,Mutes attendee microphones in the main room
 F27,Meetings,Ask to unmute and stop attendee video,should,yes,yes,Moderators can stop camera tracks and send a targeted microphone request
+F28,Meetings,Virtual camera backgrounds and blur,should,yes,partial,On-device blur and local image backgrounds with previews in Settings and before joining

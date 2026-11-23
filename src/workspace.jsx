@@ -9,6 +9,7 @@ import { generateRoomKey, validRoomKey } from './encryption.js';
 import { Logo, Dialog } from './ui.jsx';
 import { Notes } from './notes.jsx';
 import { CameraPreview, DeviceFields } from './media-devices.jsx';
+import { CameraBackgroundFields } from './camera-background.jsx';
 import { WorkspaceSettings } from './settings.jsx';
 
 const Conference = lazy(() => import('./conference.jsx').then(module => ({ default: module.Conference })));
@@ -136,7 +137,8 @@ function Preflight({ target, prefs, updatePrefs, api, name, close, onConnected, 
   }, [phase, api, target, name, onConnected, roomKey, guest, camera, microphone]);
   const pending = phase !== 'preview';
   return <Dialog title={target.title || 'Check your setup'} close={close}>
-    <CameraPreview enabled={camera && phase !== 'connecting'} deviceId={prefs.cameraId} mirror={prefs.mirrorCamera} />
+    <CameraPreview enabled={camera && phase !== 'connecting'} deviceId={prefs.cameraId} mirror={prefs.mirrorCamera}
+      background={prefs.background} backgroundImage={prefs.backgroundImage} />
     <div className="preflight-controls">
       <button className={'button' + (microphone ? ' selected' : '')} disabled={phase === 'connecting'}
         onClick={() => setMicrophone(!microphone)}><Mic size={17} /> Microphone {microphone ? 'on' : 'off'}</button>
@@ -145,6 +147,7 @@ function Preflight({ target, prefs, updatePrefs, api, name, close, onConnected, 
     </div>
     <details className="preflight-devices"><summary>Audio and video devices</summary>
       <DeviceFields prefs={prefs} changeDevice={({ key }, value) => updatePrefs({ [key + 'Id']: value })} />
+      <CameraBackgroundFields prefs={prefs} onChange={updatePrefs} />
     </details>
     {needsKey && <div className="key-box"><label htmlFor="room-key">Room encryption key</label><input id="room-key" type="password" autoComplete="off" value={roomKey} onChange={event => { setRoomKey(event.target.value.trim()); setKeyCopied(false); }} maxLength={43} disabled={pending} />
       {target.isHost ? <div className="preflight-controls"><button className="button" disabled={pending} onClick={() => { setRoomKey(generateRoomKey()); setKeyCopied(false); }}>Generate key</button><button className="button" disabled={!validRoomKey(roomKey)} onClick={async () => { try { await navigator.clipboard.writeText(roomKey); setKeyCopied(true); } catch { setFailure('Could not copy the key.'); } }}>{keyCopied ? 'Key copied' : 'Copy key'}</button></div> : <p className="muted">Ask the host for this key over a separate secure channel.</p>}
