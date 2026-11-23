@@ -176,6 +176,68 @@ test('poll ballots and board strokes are scoped to admitted participants', async
   assert.deepEqual((await api(board, { method: 'DELETE', body: {} })).json, { version: 2, strokes: [] });
 });
 
+test('breakout grants are limited to an admitted guest and one active room', async t => {
+  const { api, create, connect, moderate, calls } = await fixture(t);
+  const meeting = (await create({ lobby: false })).json;
+  const other = (await create({ lobby: false })).json;
+  const host = (await connect(meeting.id, 'owner')).json;
+  assert.equal(host.routingKey, undefined);
+  const guest = (await connect(meeting.id, 'guest')).json;
+  const stranger = (await connect(meeting.id, 'stranger')).json;
+  const path = '/meetings/' + meeting.id + '/breakouts';
+  const open = (rooms, token = 'owner') => api(path, { token, method: 'POST', body: { action: 'open', rooms } });
+  const place = (key, roomId, parent = meeting.id, userOrigin) => api('/meetings/' + parent + '/placement', {
+    token: '', method: 'POST', body: { key, roomId }, userOrigin,
+  });
+  const plan = [{ name: 'Planning', members: ['guest'] }, { name: 'Review', members: ['stranger'] }];
+  assert.equal((await api(path, { token: 'guest' })).status, 403);
+  assert.equal((await open(plan, 'guest')).status, 403);
+  assert.equal((await api(path, { token: 'guest', method: 'POST', body: { action: 'announce', text: 'Guest message' } })).status, 403);
+  assert.equal((await open([...plan, { name: 'Observer', members: ['guest'] }])).status, 400);
+  assert.equal((await open([{ name: 'Hosts', members: ['owner'] }])).status, 404);
+  assert.deepEqual((await place(guest.routingKey, meeting.id)).json, { roomId: meeting.id });
+  const retry = (await connect(meeting.id, 'guest')).json;
+  assert.notEqual(retry.routingKey, guest.routingKey);
+  assert.equal((await place(guest.routingKey, meeting.id)).status, 200);
+
+  const outcomes = await Promise.all([open(plan), open(plan)]);
+  assert.deepEqual(outcomes.map(result => result.status).sort(), [200, 409]);
+  assert.equal((await place(guest.routingKey, meeting.id, other.id)).status, 403);
+  assert.equal((await place(guest.routingKey, meeting.id, meeting.id, 'https://other.test')).status, 403);
+  const moved = (await place(guest.routingKey, meeting.id)).json;
+  const secondRoom = (await place(stranger.routingKey, meeting.id)).json;
+  assert.equal(moved.breakoutName, 'Planning');
+  assert.notEqual(moved.roomId, secondRoom.roomId);
+  const verifier = new TokenVerifier(livekitKey, livekitSecret);
+  const claims = await verifier.verify((await place(guest.routingKey, secondRoom.roomId)).json.token);
+  assert.equal(claims.sub, 'guest');
+  assert.equal(claims.video.room, moved.roomId);
+  assert.ok(!claims.video.roomAdmin && !claims.video.roomCreate && !claims.video.roomRecord);
+  assert.equal((await api('/meetings/' + meeting.id + '/notes', { token: 'guest' })).status, 403);
+
+  assert.equal((await moderate(meeting.id, { action: 'remove', identity: 'stranger' })).status, 200);
+  assert.ok(calls.some(call => call[0] === 'remove' && call[1] === secondRoom.roomId && call[2] === 'stranger'));
+  assert.equal((await place(stranger.routingKey, secondRoom.roomId)).status, 403);
+  const closed = await api(path, { method: 'POST', body: { action: 'close' } });
+  assert.deepEqual(closed.json.rooms, []);
+  assert.ok(calls.some(call => call[0] === 'end' && call[1] === moved.roomId));
+  assert.equal((await verifier.verify((await place(guest.routingKey, moved.roomId)).json.token)).video.room, meeting.id);
+
+  assert.equal((await open([plan[0]])).status, 200);
+  const newRoom = (await place(guest.routingKey, meeting.id)).json.roomId;
+  assert.notEqual(newRoom, moved.roomId);
+  assert.equal((await moderate(meeting.id, { action: 'end' })).status, 200);
+  assert.ok(calls.some(call => call[0] === 'end' && call[1] === newRoom));
+  assert.equal((await place(guest.routingKey, newRoom)).status, 410);
+
+  const encrypted = (await create({ encrypted: true })).json;
+  await connect(encrypted.id, 'owner', { keyReady: true });
+  const encryptedAttempt = await api('/meetings/' + encrypted.id + '/breakouts', {
+    method: 'POST', body: { action: 'open', rooms: plan },
+  });
+  assert.equal(encryptedAttempt.status, 403);
+});
+
 test('shared notes require access and reject stale writes; encrypted rooms skip stored notes', async t => {
   const { api, create, connect } = await fixture(t);
   const meeting = (await create({})).json;

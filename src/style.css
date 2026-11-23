@@ -183,6 +183,7 @@
   .call-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .call-title > span { display: flex; gap: 7px; align-items: center; color: var(--muted); font-size: .75rem; }
   .call-timer { font-variant-numeric: tabular-nums; color: var(--accent); }
+  .call-title > .breakout-indicator { color: var(--accent); font-weight: 650; overflow-wrap: anywhere; }
   .call-header-actions { display: flex; flex-wrap: wrap; gap: 7px; }
   .call-notice { display: flex; justify-content: space-between; align-items: center; background: var(--accent-soft); border-bottom: 1px solid var(--line); font-size: .86rem; padding: 6px 16px; }
   .call-notice.error { background: var(--danger-bg); }
@@ -237,6 +238,12 @@
   .notes { padding: 12px; display: grid; gap: 8px; }
   .notes textarea { resize: vertical; min-height: 210px; }
   .notes-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .breakout-panel, .breakout-fields { display: grid; gap: 9px; }
+  .breakout-panel { padding: 12px; font-size: .86rem; }
+  .breakout-name, .breakout-guest, .breakout-actions { display: flex; align-items: center; gap: 7px; }
+  .breakout-actions { flex-wrap: wrap; }
+  .breakout-guest > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .breakout-room { display: grid; gap: 5px; border: 1px solid var(--line); border-radius: var(--radius); padding: 9px; }
   .call-toolbar { display: flex; align-items: center; justify-content: center; gap: 7px; padding: 9px; border-top: 1px solid var(--line); background: var(--sidebar); flex-wrap: wrap; }
   .call-control { flex: 0 0 auto; padding: 5px 8px; border-radius: 9px; min-width: 62px; height: 49px; display: grid; justify-items: center; align-content: center; gap: 3px; background: transparent; border: 1px solid transparent; color: var(--text); font-size: .73rem; }
   .call-control[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); }

@@ -28,6 +28,9 @@
 | F04-H1 | Weekly schedule is atomic and rescheduling requires host ownership | API tests |
 | F22-H1 | Eligible guests can vote once and cannot open or close polls | API tests |
 | F17-H1 | Admitted guests can draw and only the host can clear the board | API tests |
+| F17-H2 | A host assigns guests to named breakout rooms and closes them to reunite the meeting | Four-client guest-meeting smoke test with loopback LiveKit |
+| F17-H3 | Room chat stays inside the assigned room and host announcements reach both rooms | Four-client guest-meeting smoke test |
+| F17-N1 | Guests cannot manage rooms or request an unrelated room grant. The server stops issuing breakout grants after removal or closure | API tests |
 | F12-P1 | 100-person load, 30-hour duration, and production availability | Deployment-scale verification |
 
 Run `npm test` for the API suite. The RTC tests use two isolated browser pages and a real loopback LiveKit server. The desktop test is aimed at the Windows development build.

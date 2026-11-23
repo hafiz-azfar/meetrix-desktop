@@ -7,7 +7,7 @@ import { ConnectionState, RoomEvent, ScreenSharePresets, Track } from 'livekit-c
 import { createEncryptedRoom } from './encrypted-room.js';
 import {
   ChartNoAxesColumn, Clipboard, FileText, Grid2X2, Hand, Lock, LockOpen, MessageSquare, Mic, MicOff, MonitorUp, SmilePlus,
-  Gauge, Maximize, PenTool, PhoneOff, Send, Settings2, ShieldCheck, SlidersHorizontal, UserMinus, Users, Video, VideoOff, X,
+  Gauge, Maximize, PanelsTopLeft, PenTool, PhoneOff, Send, Settings2, ShieldCheck, SlidersHorizontal, UserMinus, Users, Video, VideoOff, X,
 } from 'lucide-react';
 import { invitation } from './api.js';
 import { Notes } from './notes.jsx';
@@ -18,19 +18,35 @@ import { captureOptions, DeviceFields, microphoneOptions, SpeakerVolume } from '
 import { CallViewOptions } from './settings.jsx';
 import { CallStatistics } from './call-statistics.jsx';
 import { shortcutFor } from './shortcuts.js';
+import { BreakoutRooms } from './breakout-rooms.jsx';
+import { placementTopic, useRoomPlacement } from './room-placement.js';
 
 const videoOptions = { adaptiveStream: true, dynacast: true, stopLocalTrackOnUnpublish: true };
 const messageTopic = 'meetrix.meeting';
+const breakoutMessageTopic = 'meetrix.breakout-announcement';
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const reactions = ['👍', '👏', '🎉', '❤️'];
-const panelTitles = { people: 'Participants', chat: 'Meeting chat', polls: 'Polls', board: 'Whiteboard', notes: 'Notes', quality: 'Call statistics' };
+const panelTitles = {
+  people: 'Participants', chat: 'Meeting chat', polls: 'Polls', board: 'Whiteboard', notes: 'Notes',
+  quality: 'Call statistics', breakouts: 'Breakout rooms',
+};
 
 function initials(name) {
   return name.trim().split(/\s+/).slice(0, 2).map(word => word[0]?.toUpperCase()).join('') || '?';
 }
 
 export function Conference({ session, api, prefs, updatePrefs, onLeave }) {
+  const placement = useRoomPlacement(api, session);
+  if (placement.ended) return <main className="boot"><Logo />
+    <p role="status">You are disconnected from this room.</p>
+    <button className="button" onClick={onLeave}>Return to workspace</button>
+  </main>;
+  return <ConferenceConnection key={placement.session.roomId} session={placement.session} api={api}
+    prefs={prefs} updatePrefs={updatePrefs} onLeave={onLeave} refreshPlacement={placement.refreshPlacement} />;
+}
+
+function ConferenceConnection({ session, api, prefs, updatePrefs, onLeave, refreshPlacement }) {
   const [error, setError] = useState('');
   const [secureRoom, setSecureRoom] = useState(null);
   useEffect(() => {
@@ -48,7 +64,8 @@ export function Conference({ session, api, prefs, updatePrefs, onLeave }) {
   if (session.meeting.encrypted && !secureRoom) return <main className="boot"><Logo /><p role="status">{error || 'Preparing the encrypted room…'}</p><button className="button" onClick={onLeave}>Return to workspace</button></main>;
   return <LiveKitRoom room={secureRoom || undefined} serverUrl={session.serverUrl} token={session.token} audio={false} video={false}
     options={secureRoom ? undefined : videoOptions} onError={error => setError(error.message || 'Could not connect to the room.')}>
-    <Call session={session} api={api} prefs={prefs} updatePrefs={updatePrefs} onLeave={onLeave} connectionError={error} />
+    <Call session={session} api={api} prefs={prefs} updatePrefs={updatePrefs} onLeave={onLeave}
+      connectionError={error} refreshPlacement={refreshPlacement} />
     <RoomAudioRenderer volume={prefs.speakerVolume} />
   </LiveKitRoom>;
 }
@@ -81,7 +98,7 @@ function ElapsedTime({ joinedAt }) {
   return <time title="Time connected" className="call-timer">{hours ? hours + ':' : ''}{minutes}:{seconds}</time>;
 }
 
-function Call({ session, api, prefs, updatePrefs, onLeave, connectionError }) {
+function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, refreshPlacement }) {
   const room = useRoomContext();
   const connection = useConnectionState();
   const { localParticipant, isCameraEnabled, isMicrophoneEnabled, isScreenShareEnabled } = useLocalParticipant();
@@ -91,7 +108,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError }) {
   const [layout, setLayout] = useState(prefs.layout);
   const [panel, setPanel] = useState(session.meeting.isHost ? 'people' : '');
   const [error, setError] = useState('');
-  const [toast, setToast] = useState('');
+  const [toast, setToast] = useState(session.roomNotice || '');
   const [confirmation, setConfirmation] = useState(false);
   const [settings, setSettings] = useState(false);
   const [viewOptions, setViewOptions] = useState(false);
@@ -112,7 +129,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError }) {
   const host = session.meeting.isHost;
   const online = connection === ConnectionState.Connected;
   const ended = joinedAt != null && connection === ConnectionState.Disconnected;
-  const collaboration = !session.meeting.encrypted && !session.accountless;
+  const collaboration = !session.meeting.encrypted && !session.accountless && !session.breakoutName;
 
   async function run(operation) {
     setError('');
@@ -177,6 +194,12 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError }) {
 
   useEffect(() => {
     function receive(payload, participant, _kind, topic) {
+      if (!participant && topic === placementTopic) { refreshPlacement(); return; }
+      if (!participant && topic === breakoutMessageTopic && session.breakoutName && payload.byteLength <= 1200) {
+        const text = decoder.decode(payload).trim();
+        if (text && text.length <= 300) setToast('Host announcement · ' + text);
+        return;
+      }
       if (!participant || topic !== messageTopic || payload.byteLength > 6000) return;
       try {
         const event = JSON.parse(decoder.decode(payload));
@@ -198,11 +221,13 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError }) {
     }
     room.on(RoomEvent.DataReceived, receive);
     room.on(RoomEvent.ParticipantDisconnected, remove);
+    room.on(RoomEvent.Disconnected, refreshPlacement);
     return () => {
       room.off(RoomEvent.DataReceived, receive);
       room.off(RoomEvent.ParticipantDisconnected, remove);
+      room.off(RoomEvent.Disconnected, refreshPlacement);
     };
-  }, [room]);
+  }, [room, refreshPlacement, session.breakoutName]);
   useEffect(() => { chartEnd.current?.scrollIntoView({ block: 'nearest' }); }, [chat, panel]);
   useEffect(() => {
     if (!reaction) return;
@@ -329,7 +354,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError }) {
   return <main className="call">
     <header className="call-header"><Logo /><div className="call-title"><strong>{session.meeting.title}</strong><span><i className="status-dot" />{ended ? 'Disconnected' : online ? 'Connected' : connection === ConnectionState.Reconnecting ? 'Reconnecting' : 'Connecting'}
       {online && prefs.meetingTimer && joinedAt && <ElapsedTime joinedAt={joinedAt} />}
-    </span></div>
+    </span>{session.breakoutName && <span className="breakout-indicator">Breakout · {session.breakoutName}</span>}</div>
       <div className="call-header-actions">
         {session.meeting.encrypted && <span className="button subtle"><ShieldCheck size={16} /> Encrypted media</span>}
         <button className="button" disabled={!online} onClick={() => setSettings(true)}><Settings2 size={16} /> Devices</button>
@@ -381,6 +406,8 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError }) {
         {panel === 'polls' && <Polls api={api} id={id} host={host} />}
         {panel === 'board' && <Whiteboard api={api} id={id} host={host} />}
         {panel === 'quality' && <CallStatistics room={room} online={online} />}
+        {panel === 'breakouts' && <BreakoutRooms api={api} meetingId={id} participants={participants}
+          removeParticipant={identity => moderate({ action: 'remove', identity })} />}
       </aside>}
     </div>
     <footer className="call-toolbar">
@@ -390,6 +417,10 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError }) {
       <button className="call-control" disabled={!online} aria-pressed={isScreenShareEnabled} onClick={toggleShare}><MonitorUp size={20} /><span>{isScreenShareEnabled ? 'Stop share' : 'Share'}</span></button>
       <button className="call-control" aria-pressed={panel === 'people'} onClick={() => togglePanel('people')}><Users size={20} /><span>People {participants.length + guests.length}</span></button>
       <button className="call-control" aria-pressed={panel === 'chat'} onClick={() => togglePanel('chat')}><MessageSquare size={20} /><span>Chat</span></button>
+      {host && !session.meeting.encrypted && <button className="call-control" disabled={!online}
+        aria-pressed={panel === 'breakouts'} onClick={() => togglePanel('breakouts')}>
+        <PanelsTopLeft size={20} /><span>Breakouts</span>
+      </button>}
       {collaboration && <button className="call-control" aria-pressed={panel === 'notes'} onClick={() => togglePanel('notes')}><FileText size={20} /><span>Notes</span></button>}
       {collaboration && <button className="call-control" aria-pressed={panel === 'polls'} onClick={() => togglePanel('polls')}><ChartNoAxesColumn size={20} /><span>Polls</span></button>}
       {collaboration && <button className="call-control" aria-pressed={panel === 'board'} onClick={() => togglePanel('board')}><PenTool size={20} /><span>Board</span></button>}

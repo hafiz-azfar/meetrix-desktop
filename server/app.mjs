@@ -4,11 +4,12 @@ import { resolve } from 'node:path';
 import express from 'express';
 import helmet from 'helmet';
 import { rateLimit } from 'express-rate-limit';
-import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
+import { AccessToken, DataPacket_Kind, RoomServiceClient } from 'livekit-server-sdk';
 import { z } from 'zod';
 import { authenticationScope, createInsforgeAuth, insforgeSettings } from './auth.mjs';
 import { openDatabase } from './db.mjs';
 import { createDesktopAuth } from './desktop-auth.mjs';
+import { breakoutStore } from './breakouts.mjs';
 
 const scrypt = promisify(scryptCallback);
 const maxDuration = 30 * 60 * 60 * 1000;
@@ -31,6 +32,19 @@ const schedule = z.object({
 const reschedule = z.object({ title: meetingTitle, startAt: z.iso.datetime(), duration }).strict();
 const join = z.object({ name: person, passcode: optionalPasscode, keyReady: z.boolean().optional() }).strict();
 const guestJoin = join.extend({ proof: z.string().regex(/^[a-f0-9]{32}$/) });
+const routingRequest = z.object({
+  key: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  roomId: z.string().regex(/^(?:breakout_)?[A-Za-z0-9_-]{16}$/),
+}).strict();
+const breakoutCommand = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('open'), rooms: z.array(z.object({
+    name: z.string().trim().min(1).max(40), members: z.array(participantIdentity).max(99),
+  }).strict()).min(1).max(8) }).strict(),
+  z.object({ action: z.literal('close') }).strict(),
+  z.object({ action: z.literal('announce'), text: z.string().trim().min(1).max(300) }).strict(),
+]);
+const placementTopic = 'meetrix.room-placement';
+const breakoutMessageTopic = 'meetrix.breakout-announcement';
 const moderation = z.discriminatedUnion('action', [
   z.object({ action: z.literal('decide'), identity: participantIdentity, admit: z.boolean() }).strict(),
   z.object({ action: z.literal('lock'), locked: z.boolean() }).strict(),
@@ -84,6 +98,7 @@ export function createApp(options, dependencies = {}) {
   const { origin, livekitUrl, livekitKey, livekitSecret,
     databasePath, assets, trustProxyHops = 0, dev = false, desktop = false } = options;
   const db = dependencies.db ?? openDatabase(databasePath);
+  const breakouts = breakoutStore(db);
   const settings = insforgeSettings(options.insforgeUrl, options.insforgeAnonKey);
   const scope = authenticationScope(settings.insforgeUrl);
   const rooms = dependencies.rooms ?? (livekitKey && new RoomServiceClient(
@@ -157,6 +172,25 @@ export function createApp(options, dependencies = {}) {
     const identity = 'guest_' + createHash('sha256').update(meeting.id + ':' + proof).digest('base64url');
     res.json(await connectMeeting(meeting, identity, input, true));
   });
+  api.post('/meetings/:id/placement', async (req, res) => {
+    if (req.get('origin') !== origin) throw new RequestError(403, 'This origin is not allowed.');
+    const input = routingRequest.parse(req.body);
+    const initial = meetingFor(req);
+    const grant = await serial(initial.id, async () => {
+      const current = findMeeting.get(initial.id);
+      if (meetingEnded(current)) throw new RequestError(410, 'This meeting has ended.');
+      const identity = breakouts.identity(current.id, input.key);
+      const participant = identity && findGuest.get(current.id, identity);
+      if (!participant || participant.decision !== 'admitted' || current.encrypted) {
+        throw new RequestError(403, 'Your meeting session is no longer active.');
+      }
+      const target = currentLocation(current.id, identity);
+      if (target.roomId === input.roomId) return { roomId: target.roomId };
+      await ensureMediaRoom(target.roomId);
+      return { ...target, token: await mediaToken(target.roomId, identity, participant.name) };
+    });
+    res.json(grant);
+  });
   async function bearerIdentity(req) {
     const token = /^Bearer ([A-Za-z0-9_.-]{1,4096})$/.exec(req.get('authorization') || '')?.[1];
     if (!token) throw new RequestError(401, 'Sign in to continue.');
@@ -192,6 +226,9 @@ export function createApp(options, dependencies = {}) {
     if (meeting.owner !== actor && findGuest.get(meeting.id, actor)?.decision !== 'admitted') {
       throw new RequestError(403, 'Join the meeting to use this feature.');
     }
+    if (breakouts.assigned(meeting.id, actor)) {
+      throw new RequestError(403, 'Meeting notes, polls, and boards are available in the main room.');
+    }
   }
   function serial(id, operation) {
     const work = (queues.get(id) ?? Promise.resolve()).catch(() => {}).then(operation);
@@ -212,10 +249,10 @@ export function createApp(options, dependencies = {}) {
       log.run(meeting.id, actor, 'end', null, Date.now());
     }
     if (meeting.cleaned_at) return;
-    if (meeting.opened_at && rooms) await media(async client => {
-      try { await client.deleteRoom(meeting.id); }
-      catch (error) { if (!isNotFound(error)) throw error; }
-    });
+    breakouts.close(meeting.id);
+    breakouts.dropMeetingKeys(meeting.id);
+    if (meeting.opened_at && rooms) await deleteMediaRoom(meeting.id);
+    await cleanupBreakouts(meeting.id);
     markCleaned.run(Date.now(), meeting.id);
   }
   function isNotFound(error) {
@@ -225,6 +262,40 @@ export function createApp(options, dependencies = {}) {
     const participant = findGuest.get(meeting.id, identity);
     if (participant?.decision !== 'admitted') throw new RequestError(404, 'Participant not found.');
     return participant;
+  }
+  function meetingEnded(meeting) {
+    return meeting.stopped_at || (meeting.opened_at && Date.now() - meeting.opened_at >= maxDuration);
+  }
+  function currentLocation(meetingId, identity) {
+    const assigned = breakouts.assigned(meetingId, identity);
+    return assigned ? { roomId: assigned.id, breakoutName: assigned.name } : { roomId: meetingId, breakoutName: null };
+  }
+  function ensureMediaRoom(room) {
+    return media(client => client.createRoom({ name: room, emptyTimeout: 120, departureTimeout: 60, maxParticipants: 100 }));
+  }
+  async function mediaToken(room, identity, name) {
+    const token = new AccessToken(livekitKey, livekitSecret, { identity, name, ttl: '50s' });
+    token.addGrant({ roomJoin: true, room, canPublish: true, canSubscribe: true, canPublishData: true, canUpdateOwnMetadata: false });
+    return token.toJwt();
+  }
+  function deleteMediaRoom(id) {
+    return media(async client => {
+      try { await client.deleteRoom(id); }
+      catch (error) { if (!isNotFound(error)) throw error; }
+    });
+  }
+  async function cleanupBreakouts(meeting) {
+    const results = await Promise.allSettled(breakouts.pending(meeting).map(async ({ id }) => {
+      await deleteMediaRoom(id);
+      breakouts.markCleaned(id);
+    }));
+    if (results.some(result => result.status === 'rejected')) {
+      throw new RequestError(502, 'Breakout rooms are closed. LiveKit cleanup will be retried.');
+    }
+  }
+  function signalPlacement(room, identities) {
+    return media(client => client.sendData?.(room, Uint8Array.of(1), DataPacket_Kind.RELIABLE,
+      { topic: placementTopic, destinationIdentities: identities })).catch(() => {});
   }
 
   api.get('/meetings', (req, res) => {
@@ -282,7 +353,7 @@ export function createApp(options, dependencies = {}) {
       ? await checkPasscode(input.passcode, initial.passcode) : true;
     return serial(initial.id, async () => {
       const current = findMeeting.get(initial.id);
-      if (current.stopped_at || (current.opened_at && Date.now() - current.opened_at >= maxDuration)) {
+      if (meetingEnded(current)) {
         throw new RequestError(410, 'This meeting has ended.');
       }
       if (isHost && current.encrypted && !input.keyReady) return { state: 'key-required' };
@@ -299,17 +370,18 @@ export function createApp(options, dependencies = {}) {
         if (!current.opened_at || guest.decision !== 'admitted') return { state: 'waiting', hostPresent: !!current.opened_at };
         if (current.encrypted && !input.keyReady) return { state: 'key-required' };
       } else if (!current.opened_at) {
-        await media(client => client.createRoom({ name: current.id, emptyTimeout: 120, departureTimeout: 60, maxParticipants: 100 }));
+        await ensureMediaRoom(current.id);
         start.run(Date.now(), current.id);
         log.run(current.id, identity, 'open', null, Date.now());
       }
-      if (!rooms) throw new RequestError(503, 'This server needs LiveKit configuration.');
+      const location = currentLocation(current.id, identity);
       // Recreate an idle room with the same capacity after LiveKit expires it.
-      if (current.opened_at) await media(client => client.createRoom({ name: current.id, emptyTimeout: 120, departureTimeout: 60, maxParticipants: 100 }));
+      if (current.opened_at) await ensureMediaRoom(location.roomId);
       const name = isHost ? current.owner_name : findGuest.get(current.id, identity).name;
-      const token = new AccessToken(livekitKey, livekitSecret, { identity, name, ttl: '50s' });
-      token.addGrant({ roomJoin: true, room: current.id, canPublish: true, canSubscribe: true, canPublishData: true, canUpdateOwnMetadata: false });
-      return { state: 'ready', serverUrl: livekitUrl, token: await token.toJwt(), meeting: view(findMeeting.get(current.id), identity), hostIdentity: current.owner, accountless };
+      const token = await mediaToken(location.roomId, identity, name);
+      const routingKey = !isHost && !current.encrypted ? breakouts.issueKey(current.id, identity) : undefined;
+      return { state: 'ready', serverUrl: livekitUrl, token, ...location, routingKey,
+        meeting: view(findMeeting.get(current.id), identity), hostIdentity: current.owner, accountless };
     });
   }
 
@@ -323,6 +395,62 @@ export function createApp(options, dependencies = {}) {
     const guests = db.prepare("SELECT identity, name, requested_at AS requestedAt FROM attendance WHERE meeting = ? AND decision = 'pending' ORDER BY requested_at LIMIT 100")
       .all(meeting.id).map(guest => ({ ...guest, accountless: guest.identity.startsWith('guest_') }));
     res.json({ guests, locked: !!meeting.locked });
+  });
+
+  function breakoutView(meeting) {
+    return { rooms: breakouts.list(meeting).map(({ name, members }) => ({
+      name, members: members.map(identity => findGuest.get(meeting, identity))
+        .filter(guest => guest?.decision === 'admitted').map(({ identity, name }) => ({ identity, name })),
+    })) };
+  }
+
+  api.get('/meetings/:id/breakouts', (req, res) => {
+    const meeting = meetingFor(req);
+    requireHost(meeting, req.identity);
+    res.json(breakoutView(meeting.id));
+  });
+
+  api.post('/meetings/:id/breakouts', byIdentity(20), async (req, res) => {
+    const command = breakoutCommand.parse(req.body);
+    const meeting = meetingFor(req);
+    requireHost(meeting, req.identity);
+    const result = await serial(meeting.id, async () => {
+      const current = findMeeting.get(meeting.id);
+      if (!current.opened_at || meetingEnded(current)) throw new RequestError(409, 'Start the meeting before managing breakout rooms.');
+      if (current.encrypted) throw new RequestError(403, 'Breakout rooms are unavailable in encrypted meetings.');
+      const existing = breakouts.list(current.id);
+      if (command.action === 'announce') {
+        if (!existing.length) throw new RequestError(409, 'Open breakout rooms before sending an announcement.');
+        const data = new TextEncoder().encode(command.text);
+        const delivered = await media(async client => {
+          const deliveries = await Promise.allSettled(existing.filter(room => room.members.length).map(room =>
+            client.sendData(room.id, data, DataPacket_Kind.RELIABLE, { topic: breakoutMessageTopic })));
+          return deliveries.filter(delivery => delivery.status === 'fulfilled').length;
+        });
+        if (!delivered) throw new RequestError(409, 'No breakout room accepted the announcement. Try again once participants have joined.');
+        log.run(current.id, req.identity, 'announce-breakouts', null, Date.now());
+        return { ...breakoutView(current.id), delivered };
+      }
+      if (command.action === 'close') {
+        if (breakouts.close(current.id)) log.run(current.id, req.identity, 'close-breakouts', null, Date.now());
+        await Promise.all(existing.filter(room => room.members.length).map(room => signalPlacement(room.id, room.members)));
+        await cleanupBreakouts(current.id);
+      } else {
+        if (!rooms) throw new RequestError(503, 'This server needs LiveKit configuration.');
+        if (existing.length) throw new RequestError(409, 'Close the current breakout rooms before opening another set.');
+        const identities = command.rooms.flatMap(room => room.members);
+        const names = new Set(command.rooms.map(room => room.name.toLowerCase()));
+        if (names.size !== command.rooms.length || identities.length < 1 || identities.length > 99 || new Set(identities).size !== identities.length) {
+          throw new RequestError(400, 'Use distinct room names and assign each participant to only one room.');
+        }
+        for (const identity of identities) admit(current, identity);
+        breakouts.open(current.id, command.rooms);
+        log.run(current.id, req.identity, 'open-breakouts', null, Date.now());
+        await signalPlacement(current.id, identities);
+      }
+      return breakoutView(current.id);
+    });
+    res.json(result);
   });
 
   api.post('/meetings/:id/moderate', byIdentity(90), async (req, res) => {
@@ -345,10 +473,11 @@ export function createApp(options, dependencies = {}) {
         const guest = findGuest.get(current.id, command.identity);
         if (!guest || guest.decision === 'pending') throw new RequestError(404, 'Participant not found.');
         setDecision.run('denied', current.id, command.identity);
-        await media(async client => {
-          try { await client.removeParticipant(current.id, command.identity); }
+        const roomIds = [current.id, ...breakouts.assignedUncleaned(current.id, command.identity).map(room => room.id)];
+        await media(client => Promise.all(roomIds.map(async name => {
+          try { await client.removeParticipant(name, command.identity); }
           catch (error) { if (!isNotFound(error)) throw error; }
-        });
+        })));
       }
       if (command.action === 'mute') {
         admit(current, command.identity);
@@ -494,6 +623,10 @@ export function createApp(options, dependencies = {}) {
     for (const meeting of expired.all(Date.now() - maxDuration)) {
       try { await serial(meeting.id, () => disconnectRoom(findMeeting.get(meeting.id), meeting.owner)); }
       catch { console.error('Meeting cleanup is pending.'); }
+    }
+    for (const { meeting } of breakouts.pendingMeetings()) {
+      try { await serial(meeting, () => cleanupBreakouts(meeting)); }
+      catch { console.error('Breakout cleanup is pending.'); }
     }
   }, 30000);
   timer.unref();

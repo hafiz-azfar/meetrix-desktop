@@ -194,10 +194,61 @@ try {
   await host.getByRole('button', { name: 'Done', exact: true }).click();
   await guest.waitForFunction(() => Array.from(document.querySelectorAll('.stage video')).some(video => video.readyState >= 2));
 
+  const sections = [['Design partner', '0'], ['Workshop guest', '1']];
+  const otherGuests = await Promise.all(sections.map(async ([name]) => {
+    const page = await browser.newPage({ permissions: ['camera', 'microphone'] });
+    await page.goto(origin + '/join?m=' + id);
+    await page.getByRole('button', { name: 'Join as a guest' }).click();
+    await page.getByLabel('Display name').fill(name);
+    await page.getByLabel('Passcode').fill('test passcode');
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+    await page.getByRole('button', { name: 'Join now' }).click();
+    await page.getByText('The host will admit you from the waiting room.').waitFor();
+    return page;
+  }));
+  await host.getByRole('button', { name: /^People / }).click();
+  for (const [name] of sections) {
+    await host.locator('.waiting-person').filter({ hasText: name }).getByRole('button', { name: 'Admit', exact: true }).click();
+  }
+  await host.getByRole('button', { name: 'People 4', exact: true }).waitFor();
+  await guest.getByRole('button', { name: 'Camera', exact: true }).click();
+  await guest.locator('button[aria-pressed="true"]').filter({ hasText: /^Camera$/ }).waitFor();
+  await host.getByRole('button', { name: 'Breakouts', exact: true }).click();
+  await host.getByLabel('Name for breakout room 1').fill('Design');
+  await host.getByLabel('Name for breakout room 2').fill('Workshop');
+  await host.getByRole('button', { name: 'Divide evenly' }).click();
+  assert.notEqual(await host.getByLabel('Assign Test guest').inputValue(), '');
+  await host.getByLabel('Assign Test guest').selectOption('0');
+  for (const [name, room] of sections) await host.getByLabel('Assign ' + name).selectOption(room);
+  await host.getByRole('button', { name: 'Open breakout rooms' }).click();
+  for (const page of [guest, otherGuests[0]]) {
+    await page.getByText('Breakout · Design', { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'People 2', exact: true }).waitFor();
+  }
+  await otherGuests[1].getByText('Breakout · Workshop', { exact: true }).waitFor();
+  await otherGuests[1].getByRole('button', { name: 'People 1', exact: true }).waitFor();
+  assert.equal(await guest.getByRole('button', { name: 'Camera', exact: true }).getAttribute('aria-pressed'), 'false');
+  await host.getByRole('button', { name: 'People 1', exact: true }).waitFor();
+  for (const page of [guest, ...otherGuests]) await page.getByRole('button', { name: 'Chat', exact: true }).click();
+  await guest.getByRole('textbox', { name: 'Message', exact: true }).fill('Design breakout message');
+  await guest.getByRole('button', { name: 'Send message', exact: true }).click();
+  await otherGuests[0].getByText('Design breakout message', { exact: true }).waitFor();
+  assert.equal(await otherGuests[1].getByText('Design breakout message', { exact: true }).count(), 0);
+  await host.getByLabel('Announcement to rooms').fill('Wrap up your discussion.');
+  await host.getByRole('button', { name: 'Send announcement' }).click();
+  await host.getByText('Sent to 2 rooms.', { exact: true }).waitFor();
+  for (const page of [guest, ...otherGuests]) await page.getByText('Host announcement · Wrap up your discussion.', { exact: true }).waitFor();
+  await host.locator('.call-side').screenshot({ path: resolve(results, 'meetrix-breakout-rooms.png') });
+  await host.getByRole('button', { name: 'Close all rooms', exact: true }).click();
+  for (const page of [guest, ...otherGuests]) {
+    await page.getByText('Returned to the main meeting. Your microphone and camera are off.', { exact: true }).waitFor();
+  }
+  await host.getByRole('button', { name: 'People 4', exact: true }).waitFor();
+
   await host.getByRole('button', { name: 'Leave', exact: true }).click();
   await host.getByRole('button', { name: 'End for everyone' }).click();
   await guest.getByText('You are disconnected from this room.').waitFor();
-  console.log('Appearance, shortcuts, accessibility, diagnostics, camera pause, screen sharing, and guest meeting checks passed.');
+  console.log('Meeting settings and four-client breakout checks passed, including room isolation and return.');
 } finally {
   await browser?.close();
   backend?.stop();
