@@ -24,7 +24,7 @@ try {
     console.error('Desktop loaded', new URL(page.url()).protocol, (await page.locator('body').innerText()).slice(0, 450), messages);
     throw error;
   }
-  assert.equal(new URL(page.url()).origin, 'http://127.0.0.1:4317');
+  assert.match(new URL(page.url()).origin, /^http:\/\/127\.0\.0\.1:\d+$/);
   assert.equal(await page.evaluate(() => typeof window.require), 'undefined');
   const result = await page.evaluate(async () => {
     const response = await fetch('/api/config');

@@ -3,6 +3,7 @@ const { randomBytes } = require('node:crypto');
 const { mkdir, readFile, writeFile } = require('node:fs/promises');
 const { join } = require('node:path');
 const net = require('node:net');
+const { createServer } = require('node:http');
 const dgram = require('node:dgram');
 
 function freeTcpPort() {
@@ -66,17 +67,34 @@ async function startLocal({ directory, runtime, origin = 'http://127.0.0.1:4317'
   try {
     await waitForLiveKit(child, 'http://127.0.0.1:' + port);
     const { createApp } = await import('../server/app.mjs');
+    server = createServer((req, res) => {
+      if (backend) backend.app(req, res);
+      else res.writeHead(503).end();
+    });
+    function listen(port) {
+      return new Promise((resolve, reject) => {
+        function listening() { server.off('error', failed); resolve(); }
+        function failed(error) { server.off('listening', listening); reject(error); }
+        server.once('listening', listening);
+        server.once('error', failed);
+        server.listen(port, '127.0.0.1');
+      });
+    }
+    const address = new URL(origin);
+    try { await listen(Number(address.port)); }
+    catch (error) {
+      if (error.code !== 'EADDRINUSE') throw error;
+      await listen(0);
+    }
+    address.port = String(server.address().port);
+    const activeOrigin = address.origin;
     backend = createApp({
-      origin, clerkPublishableKey: instance.clerkPublishableKey, desktop: true,
+      origin: activeOrigin, clerkPublishableKey: instance.clerkPublishableKey, desktop: true,
       livekitUrl: 'ws://127.0.0.1:' + port, livekitKey: key, livekitSecret: secret,
       databasePath: join(directory, 'meetrix.sqlite'), assets: join(__dirname, '..', 'dist'),
     }, dependencies);
-    server = await new Promise((resolve, reject) => {
-      const listener = backend.app.listen(Number(new URL(origin).port), '127.0.0.1', () => resolve(listener));
-      listener.once('error', reject);
-    });
     return {
-      origin,
+      origin: activeOrigin,
       stop() {
         server.close(() => backend.close());
         server.closeAllConnections();

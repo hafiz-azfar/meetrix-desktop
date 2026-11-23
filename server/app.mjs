@@ -8,6 +8,7 @@ import { AccessToken, RoomServiceClient } from 'livekit-server-sdk';
 import { z } from 'zod';
 import { clerkHost, clerkVerifier } from './auth.mjs';
 import { openDatabase } from './db.mjs';
+import { createDesktopAuth } from './desktop-auth.mjs';
 
 const scrypt = promisify(scryptCallback);
 const maxDuration = 30 * 60 * 60 * 1000;
@@ -85,7 +86,7 @@ export function createApp(options, dependencies = {}) {
     livekitUrl.replace(/^ws/, 'http'), livekitKey, livekitSecret, { requestTimeout: 7 },
   ));
   const app = express();
-  const publicConfig = { clerkPublishableKey, desktop, mediaReady: Boolean(rooms) };
+  const publicConfig = { clerkPublishableKey, desktop, desktopBrowserSignIn: true, mediaReady: Boolean(rooms) };
   const clerkOrigin = 'https://' + clerkHost(clerkPublishableKey);
   const mediaOrigin = livekitUrl ? new URL(livekitUrl).origin : null;
   const clerkAssets = ['https://img.clerk.com', 'https://images.clerk.dev', 'https://cdn.jsdelivr.net'];
@@ -141,11 +142,25 @@ export function createApp(options, dependencies = {}) {
     next();
   });
   api.use(express.json({ limit: '56kb' }));
-  api.use(async (req, _res, next) => {
+  async function clerkIdentity(req) {
     const token = /^Bearer ([A-Za-z0-9_.-]{1,4096})$/.exec(req.get('authorization') || '')?.[1];
     if (!token) throw new RequestError(401, 'Sign in to continue.');
-    try { req.identity = await authenticate(token); }
+    try { return await authenticate(token); }
     catch { throw new RequestError(401, 'Your sign-in has expired or could not be verified.'); }
+  }
+  const desktopAuth = createDesktopAuth({ db, origin, clerkIdentity, limitOptions });
+  api.use('/desktop-auth', desktopAuth.router);
+  api.use(async (req, _res, next) => {
+    if (req.get('authorization')) {
+      req.identity = await clerkIdentity(req);
+    } else {
+      const session = desktopAuth.session(req);
+      if (!session) throw new RequestError(401, 'Sign in to continue.');
+      if (!['GET', 'HEAD'].includes(req.method) && req.get('origin') !== origin) {
+        throw new RequestError(403, 'This origin is not allowed.');
+      }
+      req.identity = session.identity;
+    }
     next();
   });
   const byIdentity = (limit) => rateLimit({ ...limitOptions, limit, keyGenerator: req => req.identity });
@@ -446,7 +461,7 @@ export function createApp(options, dependencies = {}) {
     app.use(express.static(resolve(assets), { index: false, dotfiles: 'deny', setHeaders(res, path) {
       if (path.includes('assets')) res.set('Cache-Control', 'public, max-age=31536000, immutable');
     } }));
-    app.get(['/', '/join', '/sign-in', '/sign-up'], (_req, res) => res.sendFile(resolve(assets, 'index.html'), { headers: { 'Cache-Control': 'no-store' } }));
+    app.get(['/', '/join', '/sign-in', '/sign-up', '/desktop-sign-in'], (_req, res) => res.sendFile(resolve(assets, 'index.html'), { headers: { 'Cache-Control': 'no-store' } }));
   }
   app.use((error, _req, res, _next) => {
     if (error instanceof z.ZodError) return res.status(400).json({ error: 'Check the submitted values and try again.' });
@@ -457,6 +472,7 @@ export function createApp(options, dependencies = {}) {
   });
 
   const timer = setInterval(async () => {
+    desktopAuth.sweep();
     for (const meeting of expired.all(Date.now() - maxDuration)) {
       try { await serial(meeting.id, () => disconnectRoom(findMeeting.get(meeting.id), meeting.owner)); }
       catch { console.error('Meeting cleanup is pending.'); }

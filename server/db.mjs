@@ -8,6 +8,23 @@ export function openDatabase(filename) {
   db.exec(`
     PRAGMA journal_mode = WAL;
     PRAGMA foreign_keys = ON;
+    CREATE TABLE IF NOT EXISTS desktop_sign_ins (
+      id TEXT PRIMARY KEY,
+      challenge TEXT NOT NULL,
+      code TEXT NOT NULL,
+      expires_at INTEGER NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      identity TEXT,
+      name TEXT
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS desktop_sign_ins_expiry ON desktop_sign_ins(expires_at);
+    CREATE TABLE IF NOT EXISTS desktop_sessions (
+      credential TEXT PRIMARY KEY,
+      identity TEXT NOT NULL,
+      name TEXT NOT NULL,
+      expires_at INTEGER NOT NULL
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS desktop_sessions_expiry ON desktop_sessions(expires_at);
     CREATE TABLE IF NOT EXISTS meetings (
       id TEXT PRIMARY KEY,
       owner TEXT NOT NULL,

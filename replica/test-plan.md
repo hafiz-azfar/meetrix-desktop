@@ -4,6 +4,8 @@
 |---|---|---|
 | F01-H1 | Windows opens the Clerk form and starts its local media server | `node test/smoke-desktop.mjs` with a local build |
 | F01-H2 | Clerk test account signs up and the Meetrix backend accepts its session | `node test/smoke-desktop.mjs --clerk-account` |
+| F01-H3 | Google, Apple, and GitHub open in the system browser and Clerk approval signs the requesting desktop into its workspace | `node test/smoke-browser-sign-in.mjs --providers` |
+| F01-N1 | Pairing rejects changed proofs and expired codes, limits guesses, and revokes the desktop cookie on sign-out | API tests |
 | F02-H1 | Host creates and opens a LiveKit room | Desktop and RTC smoke tests |
 | F03-N1 | Missing/wrong passcode and invalid sessions cannot obtain a grant | API tests |
 | F03-H1 | Guest waits, host admits, then guest connects | RTC smoke test |

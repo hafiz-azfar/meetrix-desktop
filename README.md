@@ -4,7 +4,7 @@ Meetrix is a Windows and web app for scheduled and instant video meetings. It us
 
 ## Run on Windows
 
-The Windows installer opens Meetrix as an Electron app. A local build can bundle a loopback-only LiveKit server and the publishable key for a Clerk development instance. Sign in with an account in that instance. To meet with people on other devices, choose **Meetrix → Connect to a server** and enter the HTTPS address of a hosted Meetrix workspace. A hosted workspace also works in a web browser.
+The Windows installer opens Meetrix as an Electron app. Select **Continue with Google, Apple, or GitHub** to use the providers enabled in Clerk. Choose a provider in your default browser, then enter the code displayed in Meetrix to approve the desktop session. Email-code sign-in is also available in the app. A local build can bundle a loopback-only LiveKit server and the publishable key for a Clerk development instance. Sign in with an account in that instance. To meet with people on other devices, choose **Meetrix → Connect to a server** and enter the HTTPS address of a hosted Meetrix workspace. A hosted workspace also works in a web browser.
 
 ### Build locally
 
@@ -18,7 +18,7 @@ Copy-Item .env.example .env
 npm run dist:local
 ```
 
-The installer is written to `release/Meetrix-Setup-0.1.0-x64.exe`. The local Windows runtime extracts a checksum-verified upstream LiveKit release and generates fresh media-server credentials at startup. Clerk sign-in still needs internet access. Local invite URLs are usable on the same PC.
+The installer is written to `release/Meetrix-Setup-0.1.1-x64.exe`. The local Windows runtime extracts a checksum-verified upstream LiveKit release and generates fresh media-server credentials at startup. Clerk sign-in still needs internet access. A paired desktop session lasts up to 12 hours. **Sign out** in Meetrix revokes the desktop session, and the browser retains its separate Clerk session. Local invite URLs are usable on the same PC.
 
 Run `npm run dist` for a distributable installer that starts at the workspace connection screen. It omits the locally configured Clerk publishable key. Installer and executable code signing are left to the distributor.
 
@@ -53,6 +53,8 @@ node test/smoke-rtc.mjs
 ```
 
 The Windows RTC smoke test uses Chrome or the Playwright Chromium build when CI is set. It uses disposable simulated identities and media devices while exercising a real LiveKit server. The desktop smoke test launches the unpacked build and checks the Clerk sign-in form. To test a full account flow against a development instance, run `node test/smoke-desktop.mjs --clerk-account`. This adds a clearly named test user to your development instance. Set `MEETRIX_QA_EMAIL` to an existing Clerk test email ending in `+clerk_test@example.com` to exercise email-code sign-in instead.
+
+To verify the browser sign-in flow in a packaged Windows build, set `MEETRIX_QA_EMAIL` to an existing Clerk test account and run `node test/smoke-browser-sign-in.mjs --providers`. The test checks the provider redirects and completes the handoff using Clerk's test email-code flow.
 
 ## License
 

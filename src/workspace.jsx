@@ -1,5 +1,4 @@
 import React, { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { UserButton, useUser } from '@clerk/react';
 import {
   ArrowDownToLine, ArrowRight, AudioLines, CalendarDays, Check, ChevronRight, CircleHelp,
   Clipboard, Clock3, DoorOpen, Ellipsis, FileText, House, LockKeyhole, Mic, Monitor, Plus, Settings, ShieldCheck,
@@ -199,8 +198,7 @@ function DeviceSettings({ prefs, updatePrefs }) {
   </div>;
 }
 
-export function Workspace({ config, getToken }) {
-  const { user } = useUser();
+export function Workspace({ config, getToken, user, accountControl }) {
   const name = (user?.fullName || user?.username || user?.firstName || 'Participant').slice(0, 60);
   const api = useMemo(() => apiFor(getToken), [getToken]);
   const [page, setPage] = useState('home');
@@ -259,7 +257,7 @@ export function Workspace({ config, getToken }) {
         {panels.map(({ id, title, icon: Icon }) => <button key={id} aria-current={page === id ? 'page' : undefined} className={page === id ? 'nav-button current' : 'nav-button'}
           onClick={() => { setPage(id); setNotice(''); }}><Icon size={18} /><span>{title}</span>{page === id && <ChevronRight size={14} />}</button>)}
       </nav>
-      <div className="sidebar-foot"><div className="server-mode"><span className="status-dot" />{config.desktop ? 'Local workspace' : 'Connected workspace'}</div><UserButton /><span>{name}</span></div>
+      <div className="sidebar-foot"><div className="server-mode"><span className="status-dot" />{config.desktop ? 'Local workspace' : 'Connected workspace'}</div>{accountControl}<span>{name}</span></div>
     </aside>
     <main className="main">
       <header className="topbar"><span>Workspace <ChevronRight size={14} /> <strong>{panels.find(p => p.id === page)?.title}</strong></span><button className="button" onClick={() => setModal('join')}><DoorOpen size={16} /> Join a room</button></header>

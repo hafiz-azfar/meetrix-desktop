@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, desktopCapturer, dialog, ipcMain, session } = require('electron');
+const { app, BrowserWindow, Menu, desktopCapturer, dialog, ipcMain, session, shell } = require('electron');
 const { createHash } = require('node:crypto');
 const { readFileSync, writeFileSync } = require('node:fs');
 const { pathToFileURL } = require('node:url');
@@ -12,7 +12,6 @@ let activeOrigin;
 let startupNotice = '';
 let changing = false;
 const settingsFile = join(__dirname, 'connect.html');
-const localOrigin = 'http://127.0.0.1:4317';
 let configPath;
 
 function originOf(value) {
@@ -98,7 +97,8 @@ async function open(origin) {
   const next = new BrowserWindow({
     title: 'Meetrix', width: 1220, height: 820, minWidth: 700, minHeight: 560,
     backgroundColor: '#111817', show: false, icon: join(__dirname, 'icon.ico'),
-    webPreferences: { session: browserSession, nodeIntegration: false, contextIsolation: true, sandbox: true,
+    webPreferences: { session: browserSession, preload: join(__dirname, 'workspace-preload.cjs'),
+      nodeIntegration: false, contextIsolation: true, sandbox: true,
       devTools: !app.isPackaged, spellcheck: false },
   });
   guardNavigation(next.webContents, origin);
@@ -121,9 +121,18 @@ function requireSettings(event) {
 }
 
 function bindSettings() {
+  ipcMain.handle('meetrix:browser-sign-in', (event, request) => {
+    if (!window || event.sender !== window.webContents || event.senderFrame !== event.sender.mainFrame
+      || !sameOrigin(event.senderFrame?.url, activeOrigin) || typeof request !== 'string' || !/^[A-Za-z0-9_-]{22}$/.test(request)) {
+      throw new Error('Open sign-in from your Meetrix workspace.');
+    }
+    const url = new URL('/desktop-sign-in', activeOrigin);
+    url.searchParams.set('request', request);
+    return shell.openExternal(url.href);
+  });
   ipcMain.handle('meetrix:settings', event => {
     requireSettings(event);
-    return { server: activeOrigin === localOrigin ? readServer() : activeOrigin || readServer(), local: Boolean(local), notice: startupNotice };
+    return { server: activeOrigin === local?.origin ? readServer() : activeOrigin || readServer(), local: Boolean(local), notice: startupNotice };
   });
   ipcMain.handle('meetrix:connect', async (event, value) => {
     requireSettings(event);
@@ -131,13 +140,13 @@ function bindSettings() {
     changing = true;
     try {
       const origin = value === 'local' && local ? local.origin : serverOrigin(value);
-      if (origin !== localOrigin) {
+      if (origin !== local?.origin) {
         const result = await fetch(origin + '/api/config', { redirect: 'error', signal: AbortSignal.timeout(8000) });
         if (!result.ok || !result.headers.get('content-type')?.includes('application/json')
           || !(await result.json()).clerkPublishableKey) throw new Error('That address did not return a Meetrix configuration.');
       }
       await open(origin);
-      writeFileSync(configPath, JSON.stringify({ server: origin === localOrigin ? null : origin }), { mode: 0o600 });
+      writeFileSync(configPath, JSON.stringify({ server: origin === local?.origin ? null : origin }), { mode: 0o600 });
       settingsWindow?.close();
       return {};
     } catch (error) {
