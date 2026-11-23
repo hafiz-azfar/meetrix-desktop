@@ -10,6 +10,7 @@ export function useRoomPlacement(api, initial) {
   }));
   const [ended, setEnded] = useState(false);
   const [waiting, setWaiting] = useState(false);
+  const [breakoutChoices, setBreakoutChoices] = useState(initial.breakoutChoices ?? []);
   const hint = useRef(null);
   const refreshPlacement = useCallback(() => hint.current?.(), []);
   const updateRoles = useCallback(snapshot => {
@@ -21,6 +22,14 @@ export function useRoomPlacement(api, initial) {
     });
   }, []);
   const { routingKey, roomId, meeting, placementEpoch = 0 } = session;
+  const chooseBreakout = useCallback(async destination => {
+    if (!routingKey || ended || waiting) throw new Error('Attendee room selection is unavailable.');
+    try {
+      await api('/meetings/' + meeting.id + '/placement', {
+        method: 'POST', body: { key: routingKey, roomId, placementEpoch, breakoutRoomId: destination || null },
+      });
+    } finally { refreshPlacement(); }
+  }, [api, ended, meeting.id, placementEpoch, refreshPlacement, roomId, routingKey, waiting]);
 
   useEffect(() => {
     if (!routingKey || ended) return;
@@ -41,9 +50,11 @@ export function useRoomPlacement(api, initial) {
         });
         if (controller.signal.aborted) return;
         if (next.waiting) {
+          setBreakoutChoices([]);
           setWaiting(true);
           return;
         }
+        setBreakoutChoices(next.breakoutChoices ?? []);
         updateRoles(next);
         const readmission = next.placementEpoch > placementEpoch;
         if (next.token && (next.roomId !== roomId || readmission)) {
@@ -78,5 +89,5 @@ export function useRoomPlacement(api, initial) {
     };
   }, [api, roomId, routingKey, meeting.id, placementEpoch, waiting, ended, updateRoles]);
 
-  return { session, ended, waiting, roles, updateRoles, refreshPlacement };
+  return { session, ended, waiting, roles, updateRoles, refreshPlacement, breakoutChoices, chooseBreakout };
 }

@@ -12,11 +12,11 @@ F10,Security,Mute remove and end meeting,must,yes,yes,
 F11,Security,End-to-end encrypted calls,should,yes,yes,Separate shared key for encrypted rooms
 F12,Meetings,30-hour meetings for 100 participants,should,yes,partial,Limits configured; high-scale verification pending
 F13,Collaboration,Meeting notes and export,should,yes,yes,Manual shared notes in standard rooms
-F14,Pro,Cloud recording and storage,should,yes,no,Requires Egress and private storage
+F14,Pro,Cloud recording and storage,should,yes,partial,Hosted LiveKit Egress integration with private S3 and authorized downloads. Production upload unverified
 F15,Pro,AI note-taking and summaries,should,yes,no,Requires consent and transcription plus model provider
 F16,Pro,Recurring scheduling and calendar sync,should,yes,partial,Daily weekday weekly and monthly recurrence with date preview and ICS handoff
-F17,Pro,Whiteboard and breakout rooms,should,yes,partial,Shared whiteboard and host or co-host breakout management with text announcements
-F18,Pro,Live captions and translation,should,yes,partial,Host or delegated captions with a local overlay and text export
+F17,Pro,Whiteboard and breakout rooms,should,yes,partial,Whiteboard and manually assigned or self-selected rooms with text announcements
+F18,Pro,Live captions and translation,should,yes,partial,Manual and on-device English automatic captions with text export
 F19,Workplace,Team chat mail and phone,could,yes,no,
 F20,Workplace,Canvas clips tasks and booking pages,could,yes,no,
 F21,Workplace,Admin console large scale support,could,yes,no,

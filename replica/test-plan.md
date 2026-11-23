@@ -46,6 +46,10 @@
 | F18-H2 | A host assigns or revokes a manual caption typist, and a forged or stale caption grant is rejected | Caption protocol unit and four-client LiveKit smoke tests |
 | F31-H1 | A moderator moves an attendee to the waiting room, then readmits them with their camera and microphone off | API and four-client LiveKit smoke tests |
 | F32-H1 | A viewer sees the presenter’s drawn strokes and can draw only after the presenter grants access. Clearing removes the marks for both clients | Four-client LiveKit smoke test |
+| F14-H1 | Every matching participant session must consent, and only the requesting host can list and download the completed MP4 | Cloud recording API tests with Egress and storage fixtures |
+| F14-N1 | The recorder subscribes only to approved media sessions and exits when an unapproved person connects | Cloud recording template smoke test with bundled LiveKit |
+| F17-H4 | An admitted attendee joins and switches self-select rooms, then returns to the main meeting with camera and microphone off | API and four-client LiveKit smoke tests |
+| F18-H3 | Windows audio produces English text offline, and a participant who opts in sends captions through the host | Windows speech smoke and four-client LiveKit smoke tests |
 | F12-P1 | 100-person load, 30-hour duration, and production availability | Deployment-scale verification |
 
 Run `npm test` for the API suite. The RTC tests use two isolated browser pages and a real loopback LiveKit server. The desktop test is aimed at the Windows development build.

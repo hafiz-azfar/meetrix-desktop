@@ -66,6 +66,29 @@ export function openDatabase(filename) {
       PRIMARY KEY (meeting, identity)
     ) STRICT;
     CREATE INDEX IF NOT EXISTS attendance_by_identity ON attendance(identity);
+    CREATE TABLE IF NOT EXISTS cloud_recordings (
+      id TEXT PRIMARY KEY,
+      meeting TEXT NOT NULL REFERENCES meetings(id),
+      host_identity TEXT NOT NULL,
+      host_version INTEGER NOT NULL,
+      requested_at INTEGER NOT NULL,
+      started_at INTEGER,
+      state TEXT NOT NULL CHECK(state IN ('requesting', 'recording', 'stopping', 'ready', 'failed')),
+      ticket_hash TEXT UNIQUE,
+      egress_id TEXT UNIQUE,
+      file_key TEXT NOT NULL,
+      reason TEXT
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS cloud_recordings_by_meeting ON cloud_recordings(meeting, requested_at DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS one_live_cloud_recording
+      ON cloud_recordings(meeting) WHERE state IN ('requesting', 'recording', 'stopping');
+    CREATE TABLE IF NOT EXISTS cloud_recording_consent (
+      recording TEXT NOT NULL REFERENCES cloud_recordings(id) ON DELETE CASCADE,
+      identity TEXT NOT NULL,
+      sid TEXT NOT NULL,
+      allowed INTEGER CHECK(allowed IN (0, 1)),
+      PRIMARY KEY (recording, identity)
+    ) STRICT;
     CREATE TABLE IF NOT EXISTS meeting_cohosts (
       meeting TEXT NOT NULL,
       identity TEXT NOT NULL,
@@ -82,6 +105,9 @@ export function openDatabase(filename) {
       cleaned_at INTEGER
     ) STRICT;
     CREATE INDEX IF NOT EXISTS breakout_rooms_by_meeting ON breakout_rooms(meeting, closed_at, position);
+    CREATE TABLE IF NOT EXISTS breakout_choice_sets (
+      meeting TEXT PRIMARY KEY REFERENCES meetings(id)
+    ) STRICT;
     CREATE TABLE IF NOT EXISTS breakout_members (
       room TEXT NOT NULL REFERENCES breakout_rooms(id) ON DELETE CASCADE,
       identity TEXT NOT NULL,

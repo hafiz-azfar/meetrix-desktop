@@ -240,6 +240,13 @@
   .captions-panel { grid-template-rows: auto minmax(65px, 1fr); flex: 1; min-height: 0; }
   .caption-toggle, .caption-form { display: flex; align-items: center; gap: 8px; }
   .caption-form input { min-width: 0; flex: 1; }
+  .automatic-caption-controls { display: grid; justify-items: start; gap: 8px; border-top: 1px solid var(--line); padding-top: 8px; }
+  .automatic-caption-controls:empty { display: none; }
+  .cloud-recording-panel { border-top: 1px solid var(--line); }
+  .cloud-recording-panel a { justify-self: start; }
+  .cloud-recording-library { display: grid; gap: 14px; margin: 0; padding: 0; list-style: none; }
+  .cloud-recording-library li { display: flex; justify-content: space-between; align-items: center; gap: 8px; overflow-wrap: anywhere; }
+  .cloud-recording-library li time { color: var(--muted); font-size: .8rem; }
   .caption-history { overflow-y: auto; overflow-wrap: anywhere; border: 1px solid var(--line); padding: 8px; border-radius: var(--radius); }
   .caption-history li { margin-bottom: 6px; }
   .caption-history time { color: var(--muted); font-size: .75rem; }

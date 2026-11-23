@@ -5,12 +5,14 @@ import { setTimeout as delay } from 'node:timers/promises';
 import express from 'express';
 import helmet from 'helmet';
 import { rateLimit } from 'express-rate-limit';
-import { AccessToken, DataPacket_Kind, ParticipantInfo_State, RoomServiceClient, TrackSource } from 'livekit-server-sdk';
+import { AccessToken, DataPacket_Kind, EgressClient, ParticipantInfo_State, RoomServiceClient, TrackSource } from 'livekit-server-sdk';
 import { z } from 'zod';
 import { authenticationScope, createInsforgeAuth, insforgeSettings } from './auth.mjs';
 import { openDatabase } from './db.mjs';
 import { createDesktopAuth } from './desktop-auth.mjs';
 import { breakoutStore } from './breakouts.mjs';
+import { cloudCommand, cloudRecordingId, createCloudRecording } from './cloud-recording.mjs';
+import { recordingStorage, streamRecording } from './cloud-recording-download.mjs';
 
 const scrypt = promisify(scryptCallback);
 const maxDuration = 30 * 60 * 60 * 1000;
@@ -37,9 +39,10 @@ const routingRequest = z.object({
   key: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
   roomId: z.string().regex(/^(?:breakout_)?[A-Za-z0-9_-]{16}$/),
   placementEpoch: z.number().int().nonnegative().safe().default(0),
+  breakoutRoomId: z.string().regex(/^breakout_[A-Za-z0-9_-]{16}$/).nullable().optional(),
 }).strict();
 const breakoutCommand = z.discriminatedUnion('action', [
-  z.object({ action: z.literal('open'), rooms: z.array(z.object({
+  z.object({ action: z.literal('open'), selfSelect: z.boolean().default(false), rooms: z.array(z.object({
     name: z.string().trim().min(1).max(40), members: z.array(participantIdentity).max(99),
   }).strict()).min(1).max(8) }).strict(),
   z.object({ action: z.literal('close') }).strict(),
@@ -109,7 +112,7 @@ function view(meeting, userId) {
 }
 
 export function createApp(options, dependencies = {}) {
-  const { origin, livekitUrl, livekitKey, livekitSecret,
+  const { origin, livekitUrl, livekitKey, livekitSecret, cloudRecording,
     databasePath, assets, trustProxyHops = 0, dev = false, desktop = false } = options;
   const db = dependencies.db ?? openDatabase(databasePath);
   const breakouts = breakoutStore(db);
@@ -119,7 +122,11 @@ export function createApp(options, dependencies = {}) {
     livekitUrl.replace(/^ws/, 'http'), livekitKey, livekitSecret, { requestTimeout: 7 },
   ));
   const app = express();
-  const publicConfig = { authProvider: 'insforge', desktop, desktopBrowserSignIn: true, mediaReady: Boolean(rooms) };
+  const egress = !desktop && cloudRecording && rooms && origin.startsWith('https://') && livekitUrl?.startsWith('wss://')
+    ? dependencies.egress ?? new EgressClient(livekitUrl.replace(/^ws/, 'http'), livekitKey, livekitSecret, { requestTimeout: 15 })
+    : null;
+  const cloudStorage = egress ? dependencies.cloudStorage ?? recordingStorage(cloudRecording) : null;
+  const publicConfig = { authProvider: 'insforge', desktop, desktopBrowserSignIn: true, mediaReady: Boolean(rooms), cloudRecording: Boolean(egress) };
   const mediaOrigin = livekitUrl ? new URL(livekitUrl).origin : null;
   const localLoopback = new URL(origin).protocol === 'http:';
   const api = express.Router();
@@ -147,6 +154,17 @@ export function createApp(options, dependencies = {}) {
   const addPreviousHost = db.prepare(`INSERT INTO attendance(meeting, identity, name, decision, requested_at)
     VALUES(?, ?, ?, 'admitted', ?) ON CONFLICT(meeting, identity) DO NOTHING`);
   const assignHost = db.prepare('UPDATE meetings SET host_identity = ?, host_version = host_version + 1 WHERE id = ?');
+  const cloud = egress && createCloudRecording({
+    db, egress, settings: cloudRecording, origin, livekitUrl, activeHost, meetingEnded,
+    getMeeting: id => findMeeting.get(id),
+    hasBreakouts: id => breakouts.list(id).length > 0,
+    isAttendee: (meeting, identity) => !identity.startsWith('guest_') &&
+      (identity === activeHost(meeting) || findGuest.get(meeting.id, identity)?.decision === 'admitted' &&
+        !breakouts.assigned(meeting.id, identity)),
+    listParticipants: id => media(client => client.listParticipants(id)),
+    log: (id, actor, event, subject) => log.run(id, actor, event, subject, Date.now()),
+    error: (status, message) => new RequestError(status, message),
+  });
 
   app.disable('x-powered-by');
   app.set('trust proxy', trustProxyHops || false);
@@ -193,6 +211,12 @@ export function createApp(options, dependencies = {}) {
   const authenticate = dependencies.authenticate ?? auth.currentIdentity;
   api.use('/auth', auth.router);
   api.use('/desktop-auth', desktopAuth.router);
+  api.get('/recording-template', rateLimit({ ...limitOptions, limit: 300 }), (req, res) => {
+    const token = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(req.get('authorization') ?? '')?.[1];
+    const template = token && cloud?.template(token);
+    if (!template) throw new RequestError(404, 'Recording template is unavailable.');
+    res.json(template);
+  });
   api.post('/meetings/:id/guest', rateLimit({ ...limitOptions, limit: 45 }), async (req, res) => {
     if (req.get('origin') !== origin) throw new RequestError(403, 'This origin is not allowed.');
     const { proof, ...input } = guestJoin.parse(req.body);
@@ -210,20 +234,28 @@ export function createApp(options, dependencies = {}) {
       if (meetingEnded(current)) throw new RequestError(410, 'This meeting has ended.');
       const identity = breakouts.identity(current.id, input.key);
       const participant = identity && findGuest.get(current.id, identity);
-      if (!current.encrypted && participant?.decision === 'pending') {
+      if (input.breakoutRoomId === undefined && !current.encrypted && participant?.decision === 'pending') {
         return { waiting: true, placementEpoch: participant.placement_epoch };
       }
       if (!identity || current.encrypted || (identity !== activeHost(current) && participant?.decision !== 'admitted')) {
         throw new RequestError(403, 'Your meeting session is no longer active.');
       }
       const target = currentLocation(current.id, identity);
-      const roles = meetingRoles(current, target.roomId);
       const placementEpoch = participant?.placement_epoch ?? 0;
+      if (input.breakoutRoomId !== undefined) {
+        if (target.roomId !== input.roomId || placementEpoch !== input.placementEpoch) {
+          throw new RequestError(409, 'Your breakout placement changed. Try again from your current room.');
+        }
+        return selectBreakout(current, identity, target.roomId, input.breakoutRoomId);
+      }
+      const roles = meetingRoles(current, target.roomId);
+      const breakoutChoices = await availableBreakouts(current, identity);
+      const placement = { ...roles, placementEpoch, ...(breakoutChoices.length ? { breakoutChoices } : {}) };
       if (target.roomId === input.roomId && placementEpoch === input.placementEpoch) {
-        return { roomId: target.roomId, ...roles, placementEpoch };
+        return { roomId: target.roomId, ...placement };
       }
       await ensureMediaRoom(target.roomId);
-      return { ...target, ...roles, placementEpoch, token: await mediaToken(target.roomId, identity, participant?.name ?? current.owner_name) };
+      return { ...target, ...placement, token: await mediaToken(target.roomId, identity, participant?.name ?? current.owner_name) };
     });
     res.json(grant);
   });
@@ -300,6 +332,7 @@ export function createApp(options, dependencies = {}) {
     }
   }
   async function disconnectRoom(meeting, actor) {
+    await cloud?.stopMeeting(meeting, 'The meeting ended.');
     if (!meeting.stopped_at) {
       markEnded.run(Date.now(), meeting.id);
       log.run(meeting.id, actor, 'end', null, Date.now());
@@ -363,6 +396,31 @@ export function createApp(options, dependencies = {}) {
       const failure = results.find(result => result.status === 'rejected' && !isNotFound(result.reason));
       if (failure) throw failure.reason;
     });
+  }
+  async function availableBreakouts(meeting, identity) {
+    if (meeting.encrypted || identity === activeHost(meeting)) return [];
+    const choices = breakouts.choices(meeting.id);
+    if (choices.length && await isActiveCoHost(meeting, identity)) return [];
+    return choices;
+  }
+  async function selectBreakout(meeting, identity, currentRoom, destination) {
+    const choices = await availableBreakouts(meeting, identity);
+    if (!choices.length) throw new RequestError(403, 'Attendee room selection is unavailable.');
+    if (destination && !choices.some(room => room.id === destination)) {
+      throw new RequestError(404, 'That breakout room is unavailable.');
+    }
+    const nextRoom = destination ?? meeting.id;
+    if (nextRoom === currentRoom) return { ok: true };
+    await ensureMediaRoom(nextRoom);
+    // Disconnect the source before allowing a new media grant. The cutoff also
+    // revokes older source grants on LiveKit Cloud.
+    const cutoff = Math.floor(Date.now() / 1000) + 1;
+    await removeFromRooms([currentRoom], identity, { revokeTokenTs: BigInt(cutoff) });
+    const remaining = cutoff * 1000 - Date.now();
+    if (remaining > 0) await delay(remaining);
+    breakouts.select(meeting.id, identity, destination);
+    log.run(meeting.id, identity, 'select-breakout', nextRoom, Date.now());
+    return { ok: true };
   }
   async function completeWaitingEviction(meeting, identity) {
     if (!findGuest.get(meeting, identity)?.waiting_evicting) return;
@@ -478,14 +536,51 @@ export function createApp(options, dependencies = {}) {
       const name = attendance?.name ?? current.owner_name;
       const token = await mediaToken(location.roomId, identity, name);
       const routingKey = current.encrypted ? undefined : breakouts.issueKey(current.id, identity);
+      const breakoutChoices = await availableBreakouts(current, identity);
       return { state: 'ready', serverUrl: livekitUrl, token, ...location, routingKey,
+        cloudRecording: Boolean(cloud && cloud.available(current)),
         placementEpoch: attendance?.placement_epoch ?? 0, ...meetingRoles(current, location.roomId),
+        ...(breakoutChoices.length ? { breakoutChoices } : {}),
         meeting: view(findMeeting.get(current.id), identity), accountless };
     });
   }
 
   api.post('/meetings/:id/connect', byIdentity(34), async (req, res) => {
     res.json(await connectMeeting(meetingFor(req), req.identity, join.parse(req.body)));
+  });
+
+  api.get('/meetings/:id/cloud-recording', (req, res) => {
+    const meeting = meetingFor(req);
+    if (!cloud || !cloud.available(meeting)) throw new RequestError(404, 'Cloud recording is unavailable.');
+    if (meetingEnded(meeting)) {
+      if (!cloud.canViewAfterEnd(meeting, req.identity)) throw new RequestError(403, 'Cloud recording is only available to its requesting host.');
+    } else requireAccess(meeting, req.identity);
+    res.json(cloud.status(meeting, req.identity));
+  });
+
+  api.get('/cloud-recordings', (req, res) => {
+    if (!cloud) throw new RequestError(404, 'Cloud recording is unavailable.');
+    res.json(cloud.listFiles(req.identity));
+  });
+
+  api.get('/cloud-recordings/:id/download', byIdentity(24), async (req, res) => {
+    const id = cloudRecordingId.safeParse(req.params.id);
+    const key = id.success && cloud?.fileKey(id.data, req.identity);
+    if (!key) throw new RequestError(404, 'Recording not found.');
+    if (req.method === 'HEAD') return res.sendStatus(405);
+    await streamRecording(res, cloudStorage, key, id.data, (status, message) => new RequestError(status, message));
+  });
+
+  api.post('/meetings/:id/cloud-recording', byIdentity(45), async (req, res) => {
+    const initial = meetingFor(req);
+    const command = cloudCommand.parse(req.body);
+    const result = await serial(initial.id, async () => {
+      const meeting = findMeeting.get(initial.id);
+      if (!cloud || !cloud.available(meeting)) throw new RequestError(404, 'Cloud recording is unavailable.');
+      requireAccess(meeting, req.identity);
+      return cloud.command(meeting, req.identity, command);
+    });
+    res.json(result);
   });
 
   api.get('/meetings/:id/lobby', async (req, res) => {
@@ -498,8 +593,8 @@ export function createApp(options, dependencies = {}) {
   });
 
   function breakoutView(meeting) {
-    return { rooms: breakouts.list(meeting).map(({ name, members }) => ({
-      name, members: members.map(identity => findGuest.get(meeting, identity))
+    return { selfSelect: breakouts.choices(meeting).length > 0, rooms: breakouts.list(meeting).map(({ id, name, members }) => ({
+      id, name, members: members.map(identity => findGuest.get(meeting, identity))
         .filter(guest => guest?.decision === 'admitted').map(({ identity, name }) => ({ identity, name })),
     })) };
   }
@@ -532,15 +627,20 @@ export function createApp(options, dependencies = {}) {
         return { ...breakoutView(current.id), delivered };
       }
       if (command.action === 'close') {
+        const selfSelect = breakouts.choices(current.id).length > 0;
         if (breakouts.close(current.id)) log.run(current.id, req.identity, 'close-breakouts', null, Date.now());
-        await Promise.all(existing.filter(room => room.members.length).map(room => signalPlacement(room.id, room.members)));
+        await Promise.all([
+          ...existing.filter(room => room.members.length).map(room => signalPlacement(room.id, room.members)),
+          ...(selfSelect ? [signalPlacement(current.id)] : []),
+        ]);
         await cleanupBreakouts(current.id);
       } else {
         if (!rooms) throw new RequestError(503, 'This server needs LiveKit configuration.');
         if (existing.length) throw new RequestError(409, 'Close the current breakout rooms before opening another set.');
         const identities = command.rooms.flatMap(room => room.members);
         const names = new Set(command.rooms.map(room => room.name.toLowerCase()));
-        if (names.size !== command.rooms.length || identities.length < 1 || identities.length > 99 || new Set(identities).size !== identities.length) {
+        if (names.size !== command.rooms.length || (!command.selfSelect && !identities.length) ||
+            identities.length > 99 || new Set(identities).size !== identities.length) {
           throw new RequestError(400, 'Use distinct room names and assign each participant to only one room.');
         }
         for (const identity of identities) admit(current, identity);
@@ -549,9 +649,10 @@ export function createApp(options, dependencies = {}) {
             throw new RequestError(409, 'The host and connected co-hosts stay in the main meeting.');
           }
         }
-        breakouts.open(current.id, command.rooms);
+        await cloud?.stopMeeting(current, 'Breakout rooms opened.');
+        breakouts.open(current.id, command.rooms, command.selfSelect);
         log.run(current.id, req.identity, 'open-breakouts', null, Date.now());
-        await signalPlacement(current.id, identities);
+        await signalPlacement(current.id, command.selfSelect ? undefined : identities);
       }
       return breakoutView(current.id);
     });
@@ -582,6 +683,7 @@ export function createApp(options, dependencies = {}) {
         if (participant?.sid !== command.sid || breakouts.assigned(current.id, command.identity)) {
           throw new RequestError(409, 'That participant must be connected to the main meeting.');
         }
+        await cloud?.stopMeeting(current, 'Meeting control changed.');
         const now = Date.now();
         db.exec('BEGIN IMMEDIATE');
         try {
@@ -632,6 +734,7 @@ export function createApp(options, dependencies = {}) {
         const guest = findGuest.get(current.id, command.identity);
         if (!guest?.waiting_evicting) {
           admit(current, command.identity);
+          await cloud?.stopMeeting(current, 'An attendee moved to the waiting room.');
           beginWaiting.run(Date.now(), current.id, command.identity);
           revokeCoHost.run(current.id, command.identity);
           log.run(current.id, req.identity, 'wait', command.identity, Date.now());
@@ -643,6 +746,7 @@ export function createApp(options, dependencies = {}) {
       if (command.action === 'remove') {
         const guest = findGuest.get(current.id, command.identity);
         if (!guest || guest.decision === 'pending') throw new RequestError(404, 'Participant not found.');
+        await cloud?.stopMeeting(current, 'An attendee was removed.');
         setDecision.run('denied', current.id, command.identity);
         rolesChanged = !!revokeCoHost.run(current.id, command.identity).changes;
         await removeFromRooms(participantRooms(current.id, command.identity), command.identity);
@@ -794,6 +898,10 @@ export function createApp(options, dependencies = {}) {
 
   api.use((_req, _res, next) => next(new RequestError(404, 'API route not found.')));
   if (assets) {
+    app.get('/recording.html', (_req, res) => {
+      if (!cloud) return res.sendStatus(404);
+      res.sendFile(resolve(assets, 'recording.html'), { headers: { 'Cache-Control': 'no-store' } });
+    });
     app.use(express.static(resolve(assets), { index: false, dotfiles: 'deny', setHeaders(res, path) {
       if (path.includes('assets')) res.set('Cache-Control', 'public, max-age=31536000, immutable');
     } }));
@@ -827,5 +935,15 @@ export function createApp(options, dependencies = {}) {
     }
   }, 30000);
   timer.unref();
-  return { app, close() { clearInterval(timer); db.close(); } };
+  let reconcilingCloud = false;
+  const recordingTimer = cloud && setInterval(async () => {
+    if (reconcilingCloud) return;
+    reconcilingCloud = true;
+    try {
+      const checks = cloud.pending.all().map(({ meeting }) => serial(meeting, () => cloud.reconcile(findMeeting.get(meeting))));
+      await Promise.allSettled(checks);
+    } finally { reconcilingCloud = false; }
+  }, 5000);
+  recordingTimer?.unref();
+  return { app, close() { clearInterval(timer); clearInterval(recordingTimer); cloudStorage?.close?.(); db.close(); } };
 }

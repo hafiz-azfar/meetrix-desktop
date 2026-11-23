@@ -1,9 +1,10 @@
-const { app, BrowserWindow, Menu, desktopCapturer, dialog, ipcMain, session, shell } = require('electron');
+const { app, BrowserWindow, Menu, desktopCapturer, dialog, ipcMain, session, shell, utilityProcess } = require('electron');
 const { createHash } = require('node:crypto');
 const { readFileSync, writeFileSync } = require('node:fs');
 const { pathToFileURL } = require('node:url');
 const { join } = require('node:path');
 const { startLocal } = require('./local.cjs');
+const { bindSpeech } = require('./speech.cjs');
 
 let window;
 let settingsWindow;
@@ -223,6 +224,12 @@ else {
       { label: 'Connect to a server…', click: settings }, { type: 'separator' }, { role: 'quit' },
     ] }, { label: 'Edit', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] }]));
     bindSettings();
+    const closeSpeech = bindSpeech({
+      ipcMain, utilityProcess, runtime: localOptions().runtime,
+      authorize: event => Boolean(window && !window.isDestroyed() && event.sender === window.webContents &&
+        event.senderFrame === event.sender.mainFrame && event.senderFrame && sameOrigin(event.senderFrame.url, activeOrigin)),
+    });
+    app.once('before-quit', closeSpeech);
     try {
       local = await startLocal({ ...localOptions(), instance: readLocalConfig() });
     } catch { startupNotice = 'The local meeting server could not start. You can still connect to a hosted Meetrix server.'; }

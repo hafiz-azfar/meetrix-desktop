@@ -311,6 +311,80 @@ test('the waiting room blocks media grants and collaboration until an attendee i
   assert.equal((await place(guest.routingKey, id, 1)).status, 403);
 });
 
+test('admitted attendees may choose only active breakout rooms when the moderator allows it', async t => {
+  const { api, create, connect, moderate, calls, livePeople, failedRemovals } = await fixture(t);
+  const { id } = (await create({ lobby: true, allowGuests: true })).json;
+  const { id: anotherMeeting } = (await create({ lobby: false })).json;
+  const path = '/meetings/' + id;
+  const host = (await connect(id, 'owner')).json;
+  const invitee = {
+    method: 'POST', token: '', body: { name: 'Guest attendee', proof: 'ea27219f5fdd461080725f537ffead91' },
+  };
+  assert.equal((await api(path + '/guest', invitee)).json.state, 'waiting');
+  const { identity } = (await api(path + '/lobby')).json.guests[0];
+  const moderator = body => api(path + '/breakouts', { method: 'POST', body });
+  const placement = (key, roomId = id, breakoutRoomId) => api(path + '/placement', {
+    method: 'POST', token: '', body: { key, roomId, ...(breakoutRoomId === undefined ? {} : { breakoutRoomId }) },
+  });
+  assert.equal((await moderate(id, { action: 'decide', identity, admit: true })).status, 200);
+  const guest = (await api(path + '/guest', invitee)).json;
+  const key = guest.routingKey;
+  const rooms = [{ name: 'Design', members: [] }, { name: 'Planning', members: [] }];
+  assert.equal((await placement(key, id, null)).status, 403);
+  assert.equal((await moderator({ action: 'open', rooms })).status, 400);
+  const opened = await moderator({ action: 'open', rooms, selfSelect: true });
+  assert.equal(opened.status, 200);
+  assert.equal(opened.json.selfSelect, true);
+  const [design, planning] = opened.json.rooms;
+  assert.deepEqual((await placement(key)).json.breakoutChoices, [
+    { id: design.id, name: 'Design' }, { id: planning.id, name: 'Planning' },
+  ]);
+  assert.equal((await placement(host.routingKey, id, design.id)).status, 403);
+
+  await connect(id, 'stranger');
+  await moderate(id, { action: 'decide', identity: 'stranger', admit: true });
+  const coHostKey = (await connect(id, 'stranger')).json.routingKey;
+  livePeople.set('stranger', { sid: 'PA_cohost', state: ParticipantInfo_State.ACTIVE, tracks: [] });
+  await moderate(id, { action: 'co-host', identity: 'stranger', sid: 'PA_cohost', enabled: true });
+  assert.equal((await placement(coHostKey)).json.breakoutChoices, undefined);
+  assert.equal((await placement(coHostKey, id, design.id)).status, 403);
+  await connect(anotherMeeting, 'owner');
+  const foreign = await api('/meetings/' + anotherMeeting + '/breakouts', {
+    method: 'POST', body: { action: 'open', rooms: [rooms[0]], selfSelect: true },
+  });
+  assert.equal((await placement(key, id, foreign.json.rooms[0].id)).status, 404);
+
+  failedRemovals.add(identity);
+  assert.equal((await placement(key, id, design.id)).status, 502);
+  assert.equal((await placement(key)).json.roomId, id);
+  failedRemovals.delete(identity);
+  assert.equal((await placement(key, id, design.id)).status, 200);
+  const verifier = new TokenVerifier(livekitKey, livekitSecret);
+  const designGrant = (await placement(key)).json;
+  assert.equal((await verifier.verify(designGrant.token)).video.room, design.id);
+  assert.equal(designGrant.breakoutName, 'Design');
+  assert.ok(calls.some(([action, room, subject, options]) =>
+    action === 'remove' && room === id && subject === identity && typeof options?.revokeTokenTs === 'bigint'));
+  assert.equal((await placement(key, id, planning.id)).status, 409);
+  assert.equal((await placement(key, design.id, planning.id)).status, 200);
+  const planningGrant = (await placement(key, design.id)).json;
+  assert.equal((await verifier.verify(planningGrant.token)).video.room, planning.id);
+  assert.equal(planningGrant.breakoutName, 'Planning');
+  assert.equal((await placement(key, planning.id, null)).status, 200);
+  assert.equal((await verifier.verify((await placement(key, planning.id)).json.token)).video.room, id);
+
+  assert.equal((await moderate(id, { action: 'wait', identity })).status, 200);
+  assert.equal((await placement(key, id, design.id)).status, 403);
+  assert.equal((await placement(key)).json.waiting, true);
+  assert.equal((await moderate(id, { action: 'decide', identity, admit: true })).status, 200);
+  assert.equal((await moderate(id, { action: 'remove', identity })).status, 200);
+  assert.equal((await placement(key, id, design.id)).status, 403);
+  const closed = await moderator({ action: 'close' });
+  assert.equal(closed.status, 200);
+  assert.equal(closed.json.selfSelect, false);
+  assert.equal((await placement(coHostKey)).json.breakoutChoices, undefined);
+});
+
 test('co-hosts can moderate only while their assigned LiveKit session is connected', async t => {
   const { api, create, connect, moderate, calls, livePeople } = await fixture(t);
   const { id } = (await create({ allowGuests: true })).json;

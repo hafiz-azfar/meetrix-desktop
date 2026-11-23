@@ -69,6 +69,24 @@ try {
   });
   const host = await browser.newPage({ permissions: ['camera', 'microphone'], viewport: { width: 1280, height: 800 } });
   const guest = await browser.newPage({ permissions: ['camera', 'microphone'] });
+  await guest.addInitScript(() => {
+    const listeners = new Set();
+    const session = 'smoke-caption-engine';
+    const trace = { starts: 0, stops: 0, batches: 0 };
+    window.speechTrace = trace;
+    window.meetrixDesktop = { speech: {
+      async available() { return true; },
+      async start() { trace.starts++; return session; },
+      async push(id, samples, sampleRate) {
+        if (id !== session || !samples.length || sampleRate <= 0) throw new Error('Invalid audio batch.');
+        if (trace.batches++ === 0) {
+          for (const receive of listeners) receive({ id, text: 'The automatic caption reached the meeting.', final: true });
+        }
+      },
+      async stop() { trace.stops++; },
+      onResult(receive) { listeners.add(receive); return () => listeners.delete(receive); },
+    } };
+  });
   await host.addInitScript(() => {
     navigator.mediaDevices.getDisplayMedia = async options => {
       window.testShareOptions = options;
@@ -333,6 +351,17 @@ try {
   const captionFile = await captionDownload;
   assert.match(captionFile.suggestedFilename(), /-captions\.txt$/);
   assert.match(await readFile(await captionFile.path(), 'utf8'), /The demo starts now\./);
+  await host.getByRole('button', { name: 'Turn on automatic captions', exact: true }).click();
+  await guest.getByRole('button', { name: 'Caption my microphone', exact: true }).waitFor();
+  assert.equal(await guest.evaluate(() => window.speechTrace.starts), 0);
+  await guest.getByRole('button', { name: 'Caption my microphone', exact: true }).click();
+  assert.equal(await guest.evaluate(() => window.speechTrace.starts), 0);
+  await guest.getByRole('button', { name: 'Unmute', exact: true }).click();
+  await host.locator('.caption-overlay').getByText('The automatic caption reached the meeting.').waitFor();
+  await guest.getByRole('button', { name: 'Mute', exact: true }).click();
+  await guest.waitForFunction(() => window.speechTrace.stops > 0);
+  await host.getByRole('button', { name: 'Turn off automatic captions', exact: true }).click();
+  await guest.getByRole('button', { name: 'Caption my microphone', exact: true }).waitFor({ state: 'detached' });
 
   assert.equal(await guest.getByRole('button', { name: 'Record', exact: true }).count(), 0);
   await host.getByRole('button', { name: 'Unmute', exact: true }).click();
@@ -434,6 +463,24 @@ try {
   }
   await host.getByRole('button', { name: 'People 4', exact: true }).waitFor();
 
+  await host.getByLabel('Let attendees choose their room').check();
+  for (const name of ['Test guest', 'Design partner', 'Workshop guest']) {
+    await host.getByLabel('Assign ' + name).selectOption('');
+  }
+  await host.getByRole('button', { name: 'Open breakout rooms' }).click();
+  await guest.getByRole('button', { name: 'Breakouts', exact: true }).click();
+  await guest.getByRole('button', { name: 'Join Design', exact: true }).click();
+  await guest.getByText('Breakout · Design', { exact: true }).waitFor();
+  await guest.getByRole('button', { name: 'Breakouts', exact: true }).click();
+  await guest.getByRole('button', { name: 'Join Workshop', exact: true }).click();
+  await guest.getByText('Breakout · Workshop', { exact: true }).waitFor();
+  assert.equal(await guest.getByRole('button', { name: 'Camera', exact: true }).getAttribute('aria-pressed'), 'false');
+  await guest.getByRole('button', { name: 'Breakouts', exact: true }).click();
+  await guest.getByRole('button', { name: 'Return to main meeting', exact: true }).click();
+  await guest.getByText('Returned to the main meeting. Your microphone and camera are off.', { exact: true }).waitFor();
+  await host.getByRole('button', { name: 'Close all rooms', exact: true }).click();
+  await host.getByRole('button', { name: 'People 4', exact: true }).waitFor();
+
   const delegate = otherGuests[0];
   const roleStatus = delegate.getByText('You’re a co-host', { exact: true });
   await host.getByRole('button', { name: 'People 4', exact: true }).click();
@@ -518,7 +565,7 @@ try {
   await delegate.getByRole('button', { name: 'Leave', exact: true }).click();
   await delegate.getByRole('button', { name: 'End for everyone' }).click();
   await guest.getByText('You are disconnected from this room.').waitFor();
-  console.log('Four-client meeting checks passed, including recurring calendar export, shared annotations, waiting room readmission, delegated captions, and prior call workflows.');
+  console.log('Four-client meeting checks passed, including automatic captions, self-selected breakouts, annotations, and waiting room readmission.');
 } finally {
   await browser?.close();
   backend?.stop();

@@ -3,6 +3,8 @@ import { Hourglass, Plus, Send, Shuffle, UserMinus, X } from 'lucide-react';
 
 export function BreakoutRooms({ api, meetingId, participants, moveToWaitingRoom, removeParticipant }) {
   const [active, setActive] = useState(null);
+  const [openSelection, setOpenSelection] = useState(false);
+  const [selfSelect, setSelfSelect] = useState(false);
   const [names, setNames] = useState(['Room 1', 'Room 2']);
   const [assignments, setAssignments] = useState({});
   const [pending, setPending] = useState(false);
@@ -14,11 +16,24 @@ export function BreakoutRooms({ api, meetingId, participants, moveToWaitingRoom,
   const attendees = participants.filter(participant => !participant.isLocal && participant.identity);
 
   useEffect(() => {
+    if (pending) return;
     const controller = new AbortController();
-    api(path, { signal: controller.signal }).then(result => setActive(result.rooms))
-      .catch(failure => { if (!controller.signal.aborted) setError(failure.message); });
-    return () => controller.abort();
-  }, [api, path, retry]);
+    let timer;
+    async function loadRooms() {
+      try {
+        const result = await api(path, { signal: controller.signal });
+        if (controller.signal.aborted) return;
+        setActive(result.rooms);
+        setOpenSelection(result.selfSelect === true);
+      } catch (failure) {
+        if (!controller.signal.aborted) setError(failure.message);
+      } finally {
+        if (!controller.signal.aborted) timer = setTimeout(loadRooms, 5000);
+      }
+    }
+    void loadRooms();
+    return () => { controller.abort(); clearTimeout(timer); };
+  }, [api, path, pending, retry]);
 
   function removeRoom(index) {
     setNames(previous => previous.filter((_, position) => position !== index));
@@ -34,6 +49,7 @@ export function BreakoutRooms({ api, meetingId, participants, moveToWaitingRoom,
     try {
       const result = await api(path, { method: 'POST', body: command });
       setActive(result.rooms);
+      setOpenSelection(result.selfSelect === true);
       if (command.action === 'announce') {
         setAnnouncement('');
         setNotice(result.delivered === 1 ? 'Sent to 1 room.' : 'Sent to ' + result.delivered + ' rooms.');
@@ -64,8 +80,8 @@ export function BreakoutRooms({ api, meetingId, participants, moveToWaitingRoom,
       setRetry(value => value + 1);
     }}>Retry</button> : <p className="muted" role="status">Loading breakout rooms…</p>
     : active.length ? <>
-      <p className="muted">Assigned participants move to their rooms. You stay in the main meeting.</p>
-      {active.map(room => <section className="breakout-room" key={room.name}>
+      <p className="muted">{openSelection ? 'Attendees can choose their own rooms.' : 'Assigned participants move to their rooms.'}</p>
+      {active.map(room => <section className="breakout-room" key={room.id || room.name}>
         <h3>{room.name}</h3>
         {!room.members.length && <p className="muted">No assigned participants</p>}
         {room.members.map(guest => <div className="breakout-guest" key={guest.identity}>
@@ -89,7 +105,7 @@ export function BreakoutRooms({ api, meetingId, participants, moveToWaitingRoom,
       </button>
     </> : <form className="form" onSubmit={event => {
       event.preventDefault();
-      submit({ action: 'open', rooms: names.map((name, index) => ({
+      submit({ action: 'open', selfSelect, rooms: names.map((name, index) => ({
         name, members: attendees.filter(person => assignments[person.identity] === index).map(person => person.identity),
       })) });
     }}>
@@ -112,7 +128,9 @@ export function BreakoutRooms({ api, meetingId, participants, moveToWaitingRoom,
           <Shuffle size={15} /> Divide evenly
         </button>
       </div>
-      {!attendees.length && <p className="muted">Admit participants before opening breakout rooms.</p>}
+      <label className="check"><input type="checkbox" checked={selfSelect} disabled={pending}
+        onChange={event => setSelfSelect(event.target.checked)} /> Let attendees choose their room</label>
+      {!attendees.length && !selfSelect && <p className="muted">Admit participants before opening breakout rooms.</p>}
       {attendees.map(person => <label key={person.identity}>{person.name || 'Guest'}
         <select aria-label={'Assign ' + (person.name || 'Guest')} value={assignments[person.identity] ?? ''} disabled={pending}
           onChange={event => setAssignments(previous => ({
@@ -122,7 +140,34 @@ export function BreakoutRooms({ api, meetingId, participants, moveToWaitingRoom,
           {names.map((name, index) => <option value={index} key={index}>{name || 'Room ' + (index + 1)}</option>)}
         </select>
       </label>)}
-      <button className="button primary" disabled={pending || !hasAssignments}>{pending ? 'Opening…' : 'Open breakout rooms'}</button>
+      <button className="button primary" disabled={pending || (!hasAssignments && !selfSelect)}>{pending ? 'Opening…' : 'Open breakout rooms'}</button>
     </form>}
+  </section>;
+}
+
+export function ChooseBreakoutRoom({ rooms, roomId, meetingId, onChoose }) {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState('');
+
+  async function choose(destination) {
+    setPending(true);
+    setError('');
+    try { await onChoose(destination); }
+    catch (failure) { setError(failure.message || 'Could not switch rooms.'); }
+    finally { setPending(false); }
+  }
+
+  return <section className="breakout-panel" aria-label="Choose a breakout room">
+    <p className="muted">Your camera and microphone turn off when you switch rooms.</p>
+    {rooms.map(room => <div className="breakout-guest" key={room.id}>
+      <strong>{room.name}</strong>
+      {room.id === roomId ? <span className="muted">Current room</span>
+        : <button type="button" className="button small" disabled={pending}
+          aria-label={'Join ' + room.name} onClick={() => choose(room.id)}>Join</button>}
+    </div>)}
+    {roomId !== meetingId && <button type="button" className="button" disabled={pending}
+      onClick={() => choose(null)}>Return to main meeting</button>}
+    {pending && <p role="status">Switching rooms…</p>}
+    {error && <p className="error" role="alert">{error}</p>}
   </section>;
 }

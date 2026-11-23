@@ -19,7 +19,7 @@ npm ci
 npm run dist
 ```
 
-The installer is written to `release/Meetrix-InsForge-Setup-0.1.6-x64.exe`. To preconfigure the installer with a project, copy `.env.example` to `.env`, fill the InsForge settings, and run `npm run dist:local`. If your project requires an anon key, use its public anon key. Installer and executable signing are left to the distributor.
+The installer is written to `release/Meetrix-InsForge-Setup-0.1.12-x64.exe`. To preconfigure the installer with a project, copy `.env.example` to `.env`, fill the InsForge settings, and run `npm run dist:local`. If your project requires an anon key, use its public anon key. Installer and executable signing are left to the distributor.
 
 ## Host a workspace
 
@@ -30,6 +30,12 @@ The installer is written to `release/Meetrix-InsForge-Setup-0.1.6-x64.exe`. To p
 5. For container hosting, build with `docker build -t meetrix .`, supply the same server settings, and mount persistent storage at `/app/data`. The image listens on port 4317.
 
 Meetrix keys account ownership by the InsForge project and user ID. Earlier Clerk meeting records remain associated with their original identities. Moving those records requires explicit account linking.
+
+### Hosted cloud recording
+
+Deploy LiveKit Egress with access to the WSS server and the workspace HTTPS origin. Allow Egress to fetch the custom `/recording.html` template. Create a private S3 bucket and scope write and download permissions to `meetrix-recordings/*`. Set `MEETRIX_CLOUD_RECORDING=true` and the `MEETRIX_EGRESS_S3_*` values from `.env.example` on the server. Omit query strings for `/recording.html` from proxy and Egress logs because LiveKit sends the recorder token in the URL. [LiveKit Egress deployment](https://docs.livekit.io/transport/self-hosting/egress/)
+
+In a standard, signed-in-only meeting, the host can request cloud recording under **Record**. Each connected attendee must consent. A job covers up to 30 participants for 30 minutes and stops if the approved roster changes. The requesting host can download the private MP4 from **Meetings → Cloud recordings**. Cloud recording requires the hosted service. The bundled local Windows workspace supports local WebM recording.
 
 ## Meeting features
 
@@ -47,7 +53,9 @@ Meetrix keys account ownership by the InsForge project and user ID. Earlier Cler
 - In a standard meeting, hosts can open **People** and make a connected, signed-in attendee a co-host. Co-hosts can manage the waiting room, lock the room, moderate attendees, and manage breakouts. Hosts can revoke co-host access from the same panel. **Mute attendees** mutes active attendee microphones in the main room. Moderators can stop an attendee’s camera or ask an attendee to turn on their microphone. The attendee chooses whether to unmute.
 - Hosts can allow invitees without accounts. The waiting room still applies, and the host sees those invitees labeled as unverified guests.
 - In standard meetings, hosts and co-hosts can use **Breakouts** to name up to eight rooms, assign connected attendees manually or evenly, and send text announcements. **Close all rooms** returns attendees to the main meeting. Hosts and co-hosts stay in the main room. Automatic moves start with the microphone and camera off.
+- Turn on **Let attendees choose their room** when opening breakouts to let attendees join, switch rooms, and return to the main meeting. Room changes start with the camera and microphone off.
 - In the main room of a standard meeting, open **Captions** to read live captions, show or hide them over the stage, and save the caption history on this device. Hosts can type captions themselves or assign a connected attendee to type them.
+- Hosts can turn on automatic captions in standard meetings. Each speaker who chooses **Caption my microphone** in the Windows x64 app can share English captions. Recognition runs on that device. Other meeting clients can display the text.
 - Hosts can open **Record**, request permission from everyone in the main room, and start once every connected participant agrees. Meetrix records available meeting audio and the shared screen or up to nine camera tiles. The recording stops if the participant list changes or someone withdraws consent. Use **Save WebM** to keep the file. Recordings stay on the host device and are capped at 30 minutes or approximately 180 MiB per file.
 - Shared notes, polls, and whiteboards. Encrypted rooms use a shared, client-generated key for LiveKit media and in-room data.
 
@@ -58,6 +66,8 @@ Meetrix keys account ownership by the InsForge project and user ID. Earlier Cler
 Run `npm test`, `npm run build`, and `npm audit`. The API tests exercise OAuth state, PKCE, workspace cookies, desktop pairing, and guest access. The Windows smoke test can check a packaged trial with `node test/smoke-browser-sign-in.mjs`. With an InsForge project configured, it checks configured Google and GitHub redirects. Optional `MEETRIX_QA_EMAIL` and `MEETRIX_QA_PASSWORD` enable the complete test using an existing test account. After staging the runtime, use `node test/smoke-rtc.mjs` for two-client LiveKit verification and `node test/smoke-guest-meeting.mjs` for the guest join and device-switching workflows.
 
 Run `node test/smoke-windows-share.mjs` with the unpacked Windows build to check the display picker and audio track creation. This test samples track state locally and closes the capture immediately.
+
+Run `node test/smoke-windows-speech.mjs` against the unpacked app to check the offline recognizer with a pinned voice sample. Run `node test/smoke-cloud-recording-template.mjs` to verify approved media subscription and roster-change shutdown with bundled LiveKit. Testing storage authorization uses a fixture. Production verification requires a configured Egress worker and bucket.
 
 ## License
 

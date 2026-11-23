@@ -18,6 +18,11 @@ export function breakoutStore(db) {
   const insertRoom = db.prepare('INSERT INTO breakout_rooms(id, meeting, name, position) VALUES(?, ?, ?, ?)');
   const insertMember = db.prepare('INSERT INTO breakout_members(room, identity) VALUES(?, ?)');
   const removeMember = db.prepare('DELETE FROM breakout_members WHERE identity = ? AND room IN (SELECT id FROM breakout_rooms WHERE meeting = ?)');
+  const removeActiveMember = db.prepare(`DELETE FROM breakout_members WHERE identity = ?
+    AND room IN (SELECT id FROM breakout_rooms WHERE meeting = ? AND closed_at IS NULL)`);
+  const selectionEnabled = db.prepare('SELECT 1 FROM breakout_choice_sets WHERE meeting = ?');
+  const enableSelection = db.prepare('INSERT INTO breakout_choice_sets(meeting) VALUES (?)');
+  const disableSelection = db.prepare('DELETE FROM breakout_choice_sets WHERE meeting = ?');
   const closeRooms = db.prepare('UPDATE breakout_rooms SET closed_at = ? WHERE meeting = ? AND closed_at IS NULL');
   const pending = db.prepare('SELECT id FROM breakout_rooms WHERE meeting = ? AND closed_at IS NOT NULL AND cleaned_at IS NULL');
   const pendingMeetings = db.prepare('SELECT DISTINCT meeting FROM breakout_rooms WHERE closed_at IS NOT NULL AND cleaned_at IS NULL LIMIT 50');
@@ -34,6 +39,18 @@ export function breakoutStore(db) {
   `);
   const dropMeetingKeys = db.prepare('DELETE FROM meeting_routing_keys WHERE meeting = ?');
 
+  function transaction(operation) {
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const result = operation();
+      db.exec('COMMIT');
+      return result;
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
   return {
     list(meeting) {
       return active.all(meeting).map(room => ({ ...room, members: members.all(room.id).map(member => member.identity) }));
@@ -41,21 +58,30 @@ export function breakoutStore(db) {
     assigned(meeting, identity) { return assigned.get(meeting, identity); },
     assignedUncleaned(meeting, identity) { return assignedUncleaned.all(meeting, identity); },
     removeMember(meeting, identity) { removeMember.run(identity, meeting); },
-    open(meeting, plan) {
-      db.exec('BEGIN IMMEDIATE');
-      try {
+    choices(meeting) { return selectionEnabled.get(meeting) ? active.all(meeting) : []; },
+    open(meeting, plan, selfSelect) {
+      transaction(() => {
+        if (selfSelect) enableSelection.run(meeting);
         for (const [position, room] of plan.entries()) {
           const id = 'breakout_' + randomBytes(12).toString('base64url');
           insertRoom.run(id, meeting, room.name, position);
           for (const identity of room.members) insertMember.run(id, identity);
         }
-        db.exec('COMMIT');
-      } catch (error) {
-        db.exec('ROLLBACK');
-        throw error;
-      }
+      });
     },
-    close(meeting) { return closeRooms.run(Date.now(), meeting).changes; },
+    select(meeting, identity, room) {
+      transaction(() => {
+        removeActiveMember.run(identity, meeting);
+        if (room) insertMember.run(room, identity);
+      });
+    },
+    close(meeting) {
+      return transaction(() => {
+        const result = closeRooms.run(Date.now(), meeting).changes;
+        disableSelection.run(meeting);
+        return result;
+      });
+    },
     pending(meeting) { return pending.all(meeting); },
     pendingMeetings() { return pendingMeetings.all(); },
     markCleaned(id) { markCleaned.run(Date.now(), id); },

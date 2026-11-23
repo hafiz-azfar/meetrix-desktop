@@ -19,11 +19,12 @@ import { applyCameraBackground, CameraBackgroundFields } from './camera-backgrou
 import { CallViewOptions } from './settings.jsx';
 import { CallStatistics } from './call-statistics.jsx';
 import { shortcutFor } from './shortcuts.js';
-import { BreakoutRooms } from './breakout-rooms.jsx';
+import { BreakoutRooms, ChooseBreakoutRoom } from './breakout-rooms.jsx';
 import { CaptionsOverlay, CaptionsPanel, useManualCaptions } from './meeting-captions.jsx';
 import { RecordingBanner, RecordingPanel, useMeetingRecording } from './meeting-recording.jsx';
 import { hostRolesTopic, placementTopic, useRoomPlacement } from './room-placement.js';
 import { ScreenPresentation } from './share-annotations.jsx';
+import { CloudRecordingBanner, CloudRecordingPanel, useCloudRecording } from './cloud-recording.jsx';
 
 const videoOptions = { adaptiveStream: true, dynacast: true, stopLocalTrackOnUnpublish: true };
 const messageTopic = 'meetrix.meeting';
@@ -54,10 +55,11 @@ export function Conference({ session, api, prefs, updatePrefs, onLeave }) {
   </main>;
   return <ConferenceConnection key={placement.session.roomId + ':' + (placement.session.placementEpoch ?? 0)} session={placement.session} api={api}
     prefs={prefs} updatePrefs={updatePrefs} onLeave={onLeave} roles={placement.roles}
-    updateRoles={placement.updateRoles} refreshPlacement={placement.refreshPlacement} />;
+    updateRoles={placement.updateRoles} refreshPlacement={placement.refreshPlacement}
+    breakoutChoices={placement.breakoutChoices} chooseBreakout={placement.chooseBreakout} />;
 }
 
-function ConferenceConnection({ session, api, prefs, updatePrefs, onLeave, roles, updateRoles, refreshPlacement }) {
+function ConferenceConnection({ session, api, prefs, updatePrefs, onLeave, roles, updateRoles, refreshPlacement, breakoutChoices, chooseBreakout }) {
   const [error, setError] = useState('');
   const [secureRoom, setSecureRoom] = useState(null);
   useEffect(() => {
@@ -76,7 +78,8 @@ function ConferenceConnection({ session, api, prefs, updatePrefs, onLeave, roles
   return <LiveKitRoom room={secureRoom || undefined} serverUrl={session.serverUrl} token={session.token} audio={false} video={false}
     options={secureRoom ? undefined : videoOptions} onError={error => setError(error.message || 'Could not connect to the room.')}>
     <Call session={session} api={api} prefs={prefs} updatePrefs={updatePrefs} onLeave={onLeave}
-      connectionError={error} roles={roles} updateRoles={updateRoles} refreshPlacement={refreshPlacement} />
+      connectionError={error} roles={roles} updateRoles={updateRoles} refreshPlacement={refreshPlacement}
+      breakoutChoices={breakoutChoices} chooseBreakout={chooseBreakout} />
     <RoomAudioRenderer volume={prefs.speakerVolume} />
   </LiveKitRoom>;
 }
@@ -109,7 +112,7 @@ function ElapsedTime({ joinedAt }) {
   return <time title="Time connected" className="call-timer">{hours ? hours + ':' : ''}{minutes}:{seconds}</time>;
 }
 
-function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, roles, updateRoles, refreshPlacement }) {
+function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, roles, updateRoles, refreshPlacement, breakoutChoices, chooseBreakout }) {
   const room = useRoomContext();
   const connection = useConnectionState();
   const { localParticipant, isCameraEnabled, isMicrophoneEnabled, isScreenShareEnabled } = useLocalParticipant();
@@ -156,8 +159,13 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, role
   const coHost = online && !host && meetingTools && !session.accountless && isCoHost(localParticipant);
   const canModerate = host || coHost;
   const canManageBreakouts = meetingTools && canModerate;
-  const captions = useManualCaptions(room, { enabled: meetingTools, hostIdentity, hostVersion });
+  const canOpenBreakouts = canManageBreakouts || breakoutChoices.length > 0;
+  const microphoneTrack = isMicrophoneEnabled
+    ? localParticipant.getTrackPublication(Track.Source.Microphone)?.track?.mediaStreamTrack : null;
+  const captions = useManualCaptions(room, { enabled: meetingTools, hostIdentity, hostVersion, online, microphone: microphoneTrack });
   const recording = useMeetingRecording(room, { enabled: meetingTools, hostIdentity, host, meetingId: id });
+  const cloudRecordingEnabled = meetingTools && session.cloudRecording === true;
+  const cloudRecording = useCloudRecording({ enabled: cloudRecordingEnabled, meetingId: id, online, api });
 
   async function run(operation) {
     setError('');
@@ -228,8 +236,8 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, role
   }, [api, id, canModerate, ended, updateRoles]);
 
   useEffect(() => {
-    setPanel(previous => (!canManageBreakouts && previous === 'breakouts') || (!host && previous === 'recording') ? 'people' : previous);
-  }, [canManageBreakouts, host]);
+    setPanel(previous => (!canOpenBreakouts && previous === 'breakouts') || (!host && previous === 'recording') ? 'people' : previous);
+  }, [canOpenBreakouts, host]);
 
   useEffect(() => {
     function receive(payload, participant, _kind, topic, _encryption, senderIdentity) {
@@ -512,6 +520,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, role
         <button className="button small" onClick={() => setMicrophoneRequest(false)}>Dismiss request</button></div>
     </div>}
     {meetingTools && <RecordingBanner recording={recording} host={host} />}
+    {cloudRecordingEnabled && <CloudRecordingBanner recording={cloudRecording} />}
     <div className="call-body">
       {reaction && <div className="reaction-toast" role="status"><span>{reaction.emoji}</span> {reaction.from}</div>}
       <div className="stage-wrap"><section className={stageClass} aria-label="Meeting stage">
@@ -582,10 +591,15 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, role
         {panel === 'board' && <Whiteboard api={api} id={id} host={host} />}
         {panel === 'quality' && <CallStatistics room={room} online={online} />}
         {panel === 'captions' && <CaptionsPanel captions={captions} host={host} online={online} meetingId={id} />}
-        {panel === 'recording' && host && <RecordingPanel recording={recording} participants={participants} online={online} />}
+        {panel === 'recording' && host && <>
+          <RecordingPanel recording={recording} participants={participants} online={online} />
+          {cloudRecordingEnabled && <CloudRecordingPanel recording={cloudRecording} online={online} />}
+        </>}
         {panel === 'breakouts' && canManageBreakouts && <BreakoutRooms api={api} meetingId={id} participants={participants.filter(participant => !roleOf(participant))}
           moveToWaitingRoom={moveToWaitingRoom}
           removeParticipant={identity => moderate({ action: 'remove', identity })} />}
+        {panel === 'breakouts' && !canManageBreakouts && breakoutChoices.length > 0 && <ChooseBreakoutRoom
+          rooms={breakoutChoices} roomId={session.roomId} meetingId={id} onChoose={chooseBreakout} />}
       </aside>}
     </div>
     <footer className="call-toolbar">
@@ -595,9 +609,9 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, role
       <button className="call-control" disabled={!online || sharing} aria-pressed={isScreenShareEnabled} onClick={toggleShare}><MonitorUp size={20} /><span>{isScreenShareEnabled ? 'Stop share' : 'Share'}</span></button>
       <button className="call-control" aria-pressed={panel === 'people'} onClick={() => togglePanel('people')}><Users size={20} /><span>People {participants.length + (canModerate ? guests.length : 0)}</span></button>
       <button className="call-control" aria-pressed={panel === 'chat'} onClick={() => togglePanel('chat')}><MessageSquare size={20} /><span>Chat</span></button>
-      {meetingTools && <button className="call-control" aria-pressed={panel === 'captions'} onClick={() => togglePanel('captions')}><Captions size={20} /><span>Captions</span></button>}
+      {meetingTools && <button className="call-control" aria-pressed={panel === 'captions'} onClick={() => togglePanel('captions')}><Captions size={20} /><span>{captions.automatic.active ? 'Captions on' : 'Captions'}</span></button>}
       {meetingTools && host && <button className="call-control" aria-pressed={panel === 'recording'} onClick={() => togglePanel('recording')}><CircleDot size={20} /><span>Record</span></button>}
-      {canManageBreakouts && <button className="call-control" disabled={!online}
+      {canOpenBreakouts && <button className="call-control" disabled={!online}
         aria-pressed={panel === 'breakouts'} onClick={() => togglePanel('breakouts')}>
         <PanelsTopLeft size={20} /><span>Breakouts</span>
       </button>}

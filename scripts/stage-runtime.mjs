@@ -4,6 +4,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { insforgeSettings } from '../server/auth.mjs';
+import { stageSpeechRuntime } from './stage-speech.mjs';
 
 if (process.platform !== 'win32' || process.arch !== 'x64') throw new Error('The bundled LiveKit runtime targets Windows x64.');
 const runtime = resolve('vendor/runtime');
@@ -22,5 +23,6 @@ if (createHash('sha256').update(bytes).digest('hex') !== sha256) throw new Error
 execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Expand-Archive -LiteralPath $env:MEETRIX_ZIP -DestinationPath $env:MEETRIX_RUNTIME -Force'], {
   env: { ...process.env, MEETRIX_ZIP: archive, MEETRIX_RUNTIME: runtime }, stdio: 'inherit', windowsHide: true,
 });
+await stageSpeechRuntime(runtime);
 const settings = process.argv.includes('--local-insforge') ? insforgeSettings(process.env.INSFORGE_URL, process.env.INSFORGE_ANON_KEY) : {};
 await writeFile(resolve(runtime, 'local-instance.json'), JSON.stringify(settings));

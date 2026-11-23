@@ -1,0 +1,9 @@
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; color: #fff; background: #161825; font: 18px system-ui, sans-serif; }
+#recording-stage { height: 100%; display: flex; flex-direction: column; gap: 12px; padding: 16px; }
+.recording-presentation { flex: 4; min-height: 0; }
+.recording-gallery { flex: 1; min-height: 0; display: grid; gap: 8px; grid-template-columns: repeat(var(--columns, 1), minmax(0, 1fr)); grid-auto-rows: minmax(0, 1fr); }
+.recording-gallery:empty { display: none; }
+.recording-tile { position: relative; height: 100%; overflow: hidden; border-radius: 10px; background: #252941; }
+.recording-tile video { width: 100%; height: 100%; object-fit: contain; }
+.recording-tile span { position: absolute; padding: 4px 8px; left: 6px; bottom: 6px; max-width: calc(100% - 12px); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; border-radius: 4px; background: #10121c; }

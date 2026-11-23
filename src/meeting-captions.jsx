@@ -2,6 +2,7 @@ import { useEffect, useEffectEvent, useRef, useState } from 'react';
 import { ConnectionState, RoomEvent } from 'livekit-client';
 import { Send } from 'lucide-react';
 import { download } from './api.js';
+import { useAutomaticCaptions } from './automatic-captions.js';
 import {
   captionLength, isCaptionHost, matchesCaptioner, readCaptionerPacket, readCaptionText, readPublishedCaption,
 } from './caption-protocol.js';
@@ -11,7 +12,7 @@ const captionerTopic = 'meetrix.captioner';
 const encoder = new TextEncoder();
 const captionInterval = 250;
 
-export function useManualCaptions(room, { enabled, hostIdentity, hostVersion = 0 }) {
+export function useManualCaptions(room, { enabled, hostIdentity, hostVersion = 0, online, microphone }) {
   const [entries, setEntries] = useState([]);
   const [current, setCurrent] = useState(null);
   const [visible, setVisible] = useState(true);
@@ -21,6 +22,7 @@ export function useManualCaptions(room, { enabled, hostIdentity, hostVersion = 0
   const awaitingResult = useRef(null);
   const lastCaption = useRef(-Infinity);
   const lastPublish = useRef(-Infinity);
+  const automatic = useAutomaticCaptions(room, { enabled, hostIdentity, hostVersion, online, microphone, append });
 
   useEffect(() => {
     if (!current) return;
@@ -28,11 +30,13 @@ export function useManualCaptions(room, { enabled, hostIdentity, hostVersion = 0
     return () => clearTimeout(timeout);
   }, [current]);
 
-  function append(line) {
+  function append(line, speaker = '') {
     const now = performance.now();
-    if (now - lastCaption.current < captionInterval) return;
-    lastCaption.current = now;
-    const entry = { line, at: Date.now() };
+    if (!speaker) {
+      if (now - lastCaption.current < captionInterval) return;
+      lastCaption.current = now;
+    }
+    const entry = { line, speaker, at: Date.now(), id: crypto.randomUUID() };
     setCurrent(entry);
     setEntries(previous => [...previous.slice(-999), entry]);
   }
@@ -174,12 +178,13 @@ export function useManualCaptions(room, { enabled, hostIdentity, hostVersion = 0
   const selected = validAssignment(assignment) ? assignment : null;
   const canType = connected() && (isCaptionHost(hostIdentity, room.localParticipant) ||
     matchesCaptioner(selected, room.localParticipant));
-  return { entries, current, visible, setVisible, send, captioners, selected, canType, assignCaptioner };
+  return { entries, current, visible, setVisible, send, captioners, selected, canType, assignCaptioner, automatic };
 }
 
 export function CaptionsOverlay({ captions }) {
   if (!captions.visible || !captions.current) return null;
-  return <div className="caption-overlay" role="status"><span>{captions.current.line}</span></div>;
+  const { line, speaker } = captions.current;
+  return <div className="caption-overlay" role="status"><span>{speaker && <strong>{speaker} · </strong>}{line}</span></div>;
 }
 
 const formatTime = value => new Date(value).toLocaleTimeString([], {
@@ -187,6 +192,7 @@ const formatTime = value => new Date(value).toLocaleTimeString([], {
 });
 
 export function CaptionsPanel({ captions, host, online, meetingId }) {
+  const { automatic } = captions;
   const [draft, setDraft] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
@@ -214,15 +220,17 @@ export function CaptionsPanel({ captions, host, online, meetingId }) {
   }
 
   function save() {
-    const text = captions.entries.map(({ line, at }) => formatTime(at) + '  ' + line).join('\n');
+    const text = captions.entries.map(({ line, speaker, at }) =>
+      formatTime(at) + '  ' + (speaker ? speaker + '  ' : '') + line).join('\n');
     download('meetrix-' + meetingId + '-captions.txt', text + '\n', 'text/plain;charset=utf-8');
   }
 
   return <div className="meeting-tool-panel captions-panel">
     <label className="caption-toggle"><input type="checkbox" checked={captions.visible} onChange={event => captions.setVisible(event.target.checked)} /> Show captions on stage</label>
     <div className="caption-history" role="region" aria-label="Caption history" tabIndex={0}>
-      {captions.entries.length ? <ol>{captions.entries.map(({ line, at }) => <li key={at}><time dateTime={new Date(at).toISOString()}>{formatTime(at)}</time> {line}</li>)}</ol>
-        : <p className="muted">Captions typed by the host or an assigned captioner appear here.</p>}
+      {captions.entries.length ? <ol>{captions.entries.map(({ line, speaker, at, id }) => <li key={id}>
+        <time dateTime={new Date(at).toISOString()}>{formatTime(at)}</time> {speaker && <strong>{speaker} · </strong>}{line}</li>)}</ol>
+        : <p className="muted">Live meeting captions appear here.</p>}
       <span ref={end} />
     </div>
     {error && <p role="status">{error}</p>}
@@ -237,6 +245,18 @@ export function CaptionsPanel({ captions, host, online, meetingId }) {
       <input aria-label="Caption text" placeholder="Type a live caption" maxLength={captionLength} value={draft} onChange={event => setDraft(event.target.value)} />
       <button className="icon-button" disabled={pending || !online || !draft.trim()} aria-label="Send caption"><Send size={18} /></button>
     </form>}
+    <section className="automatic-caption-controls" aria-label="Automatic captions">
+      {host && <button type="button" className="button" disabled={!online || automatic.pending} onClick={automatic.toggleMeeting}>
+        {automatic.active ? 'Turn off automatic captions' : 'Turn on automatic captions'}</button>}
+      {automatic.active && <>
+        <p className="muted">English speech recognition runs on each participating Windows device. Recognized text is shared with this meeting.</p>
+        {automatic.available && <button type="button" className="button" onClick={automatic.toggleMicrophone}>
+          {automatic.subscribed ? 'Stop captioning my microphone' : 'Caption my microphone'}</button>}
+        {automatic.subscribed && <p role="status">{automatic.listening ? 'Captioning your microphone.' : 'Microphone captions are ready when your microphone is on.'}</p>}
+        {!automatic.available && <p className="muted">You can read captions here. Captioning your own microphone requires Meetrix for Windows with speech recognition installed.</p>}
+      </>}
+      {automatic.notice && <p role="status">{automatic.notice}</p>}
+    </section>
     {captions.entries.length > 0 && <button className="button" onClick={save}>Save caption history</button>}
   </div>;
 }

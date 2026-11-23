@@ -12,6 +12,7 @@ import { Notes } from './notes.jsx';
 import { CameraPreview, DeviceFields } from './media-devices.jsx';
 import { CameraBackgroundFields } from './camera-background.jsx';
 import { WorkspaceSettings } from './settings.jsx';
+import { CloudRecordingLibrary } from './cloud-recording.jsx';
 
 const Conference = lazy(() => import('./conference.jsx').then(module => ({ default: module.Conference })));
 const panels = [
@@ -293,6 +294,8 @@ export function Workspace({ config, user, accountControl, prefs, updatePrefs }) 
           </section>
         </>}
         {page === 'meetings' && <div className="page-head"><h1>Meetings</h1><div className="meeting-actions">
+          {config.cloudRecording && <button className="button" onClick={() => setModal('cloud-recordings')}>
+            <ArrowDownToLine size={16} /> Cloud recordings</button>}
           <button className="button" onClick={() => setModal('join')}><DoorOpen size={17} /> Join</button>
           <button className="button primary" onClick={() => setModal('schedule')}><Plus size={18} /> Schedule</button>
         </div></div>}
@@ -316,6 +319,7 @@ export function Workspace({ config, user, accountControl, prefs, updatePrefs }) 
     {editing && modal !== 'edit' && <Dialog title={editing.title} close={() => setEditing(null)}><div className="dialog-actions"><button className="button danger" onClick={() => cancel(editing)}>Cancel meeting</button><button className="button primary" onClick={() => setModal('edit')}>Reschedule</button></div></Dialog>}
     {editing && modal === 'edit' && <MeetingForm mode="edit" meeting={editing} api={api} name={name} close={() => { setModal(''); setEditing(null); }} onCreated={meeting => { setEditing(null); created(meeting, true); }} />}
     {archived && <Dialog title={archived.title + ' · Notes'} close={() => setArchived(null)}><Notes api={api} id={archived.id} readOnly /></Dialog>}
+    {modal === 'cloud-recordings' && <CloudRecordingLibrary api={api} close={() => setModal('')} />}
     {modal.startsWith('join') && <JoinForm code={modal === 'join' ? inviteCode || '' : modal.slice(5)} close={() => setModal('')} onJoin={enter} />}
     {target && <Preflight target={target} prefs={prefs} updatePrefs={updatePrefs} api={api} name={name} close={() => setTarget(null)} onConnected={setSession} />}
   </div>;

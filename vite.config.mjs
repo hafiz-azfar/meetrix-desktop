@@ -30,6 +30,7 @@ export default defineConfig({
   plugins: [react(), cameraAssets],
   build: {
     rollupOptions: {
+      input: { workspace: 'index.html', recording: 'recording.html' },
       output: { manualChunks(id) {
         if (id.includes('livekit')) return 'media';
       } },
