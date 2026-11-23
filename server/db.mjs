@@ -62,6 +62,13 @@ export function openDatabase(filename) {
       PRIMARY KEY (meeting, identity)
     ) STRICT;
     CREATE INDEX IF NOT EXISTS attendance_by_identity ON attendance(identity);
+    CREATE TABLE IF NOT EXISTS meeting_cohosts (
+      meeting TEXT NOT NULL,
+      identity TEXT NOT NULL,
+      sid TEXT NOT NULL,
+      PRIMARY KEY (meeting, identity),
+      FOREIGN KEY (meeting, identity) REFERENCES attendance(meeting, identity) ON DELETE CASCADE
+    ) STRICT;
     CREATE TABLE IF NOT EXISTS breakout_rooms (
       id TEXT PRIMARY KEY,
       meeting TEXT NOT NULL REFERENCES meetings(id),

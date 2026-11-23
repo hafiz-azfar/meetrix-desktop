@@ -15,8 +15,10 @@ try {
     instance: { insforgeUrl: 'https://auth.meetrix.test' },
     dependencies: { createAuth: () => ({
       async getPublicAuthConfig() { return { data: { oAuthProviders: [] } }; },
-      async signInWithPassword() {
-        return { data: { accessToken: 'test-token', user: { id: '4e5c7bb9-0218-4d57-b9c0-4ff45db24395', profile: { name: 'Alex Morgan' } } } };
+      async signInWithPassword({ email }) {
+        const delegate = email === 'delegate@example.test';
+        const id = delegate ? 'd338dd36-66ed-4dba-8f37-ddc3af85a041' : '4e5c7bb9-0218-4d57-b9c0-4ff45db24395';
+        return { data: { accessToken: 'test-token', user: { id, profile: { name: delegate ? 'Design partner' : 'Alex Morgan' } } } };
       },
     }) },
   });
@@ -248,9 +250,18 @@ try {
   const sections = [['Design partner', '0'], ['Workshop guest', '1']];
   const otherGuests = await Promise.all(sections.map(async ([name]) => {
     const page = await browser.newPage({ permissions: ['camera', 'microphone'] });
+    const signedIn = name === 'Design partner';
+    if (signedIn) {
+      const response = await page.request.post(origin + '/api/auth/email/password', {
+        headers: { Origin: origin }, data: { email: 'delegate@example.test', password: 'test-password' },
+      });
+      assert.equal(response.status(), 200);
+    }
     await page.goto(origin + '/join?m=' + id);
-    await page.getByRole('button', { name: 'Join as a guest' }).click();
-    await page.getByLabel('Display name').fill(name);
+    if (!signedIn) {
+      await page.getByRole('button', { name: 'Join as a guest' }).click();
+      await page.getByLabel('Display name').fill(name);
+    }
     await page.getByLabel('Passcode').fill('test passcode');
     await page.getByRole('button', { name: 'Continue', exact: true }).click();
     await page.getByRole('button', { name: 'Join now' }).click();
@@ -301,10 +312,50 @@ try {
   }
   await host.getByRole('button', { name: 'People 4', exact: true }).waitFor();
 
+  const delegate = otherGuests[0];
+  const roleStatus = delegate.getByText('You’re a co-host', { exact: true });
+  await host.getByRole('button', { name: 'People 4', exact: true }).click();
+  assert.equal(await host.getByRole('button', { name: 'Make co-host: Test guest', exact: true }).count(), 0);
+  host.once('dialog', dialog => dialog.accept());
+  await host.getByRole('button', { name: 'Make co-host: Design partner', exact: true }).click();
+  await roleStatus.waitFor();
+  await delegate.getByRole('button', { name: 'People 4', exact: true }).click();
+  assert.equal(await delegate.getByRole('button', { name: 'Remove Alex Morgan' }).count(), 0);
+  await delegate.getByRole('button', { name: 'Lock room', exact: true }).click();
+  await delegate.getByRole('button', { name: 'Unlock room', exact: true }).click();
+  await guest.getByRole('button', { name: 'Unmute', exact: true }).click();
+  await guest.getByRole('button', { name: 'Mute', exact: true }).waitFor();
+  await delegate.getByRole('button', { name: 'Mute attendees', exact: true }).click();
+  await guest.getByRole('button', { name: 'Unmute', exact: true }).waitFor();
+  await delegate.getByRole('button', { name: 'Ask Test guest to unmute', exact: true }).click();
+  await guest.getByRole('button', { name: 'Turn on microphone', exact: true }).waitFor();
+  assert.ok(await guest.getByRole('button', { name: 'Unmute', exact: true }).isVisible());
+  assert.equal(await host.getByRole('button', { name: 'Turn on microphone', exact: true }).count(), 0);
+  await guest.getByRole('button', { name: 'Turn on microphone', exact: true }).click();
+  await guest.getByRole('button', { name: 'Mute', exact: true }).waitFor();
+  await guest.getByRole('button', { name: 'Camera', exact: true }).click();
+  await delegate.getByRole('button', { name: 'Stop camera for Test guest', exact: true }).click();
+  await guest.locator('button[aria-pressed="false"]').filter({ hasText: /^Camera$/ }).waitFor();
+
+  await delegate.getByRole('button', { name: 'Breakouts', exact: true }).click();
+  assert.equal(await delegate.getByLabel('Assign Alex Morgan').count(), 0);
+  await delegate.getByLabel('Name for breakout room 1').fill('Peer review');
+  await delegate.getByLabel('Assign Test guest').selectOption('0');
+  await delegate.getByRole('button', { name: 'Open breakout rooms' }).click();
+  await guest.getByText('Breakout · Peer review', { exact: true }).waitFor();
+  await delegate.getByRole('button', { name: 'Close all rooms' }).click();
+  await guest.getByText('Returned to the main meeting. Your microphone and camera are off.', { exact: true }).waitFor();
+  await host.getByRole('button', { name: 'Revoke co-host access for Design partner', exact: true }).click();
+  await roleStatus.waitFor({ state: 'detached' });
+  await delegate.getByRole('button', { name: 'Breakouts', exact: true }).waitFor({ state: 'detached' });
+  assert.equal((await delegate.request.post(origin + '/api/meetings/' + id + '/moderate', {
+    headers: { Origin: origin }, data: { action: 'lock', locked: true },
+  })).status(), 403);
+
   await host.getByRole('button', { name: 'Leave', exact: true }).click();
   await host.getByRole('button', { name: 'End for everyone' }).click();
   await guest.getByText('You are disconnected from this room.').waitFor();
-  console.log('Meeting settings, four-client breakouts, caption export, and consent-gated WebM recording checks passed.');
+  console.log('Meeting settings, four-client breakouts, caption export, consent-gated recording, and live co-host grant and revocation checks passed.');
 } finally {
   await browser?.close();
   backend?.stop();

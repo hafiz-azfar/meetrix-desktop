@@ -4,6 +4,7 @@ export const placementTopic = 'meetrix.room-placement';
 
 export function useRoomPlacement(api, initial) {
   const [session, setSession] = useState(() => ({ ...initial, roomId: initial.roomId ?? initial.meeting.id }));
+  const [coHosts, setCoHosts] = useState(initial.coHosts ?? []);
   const [ended, setEnded] = useState(false);
   const hint = useRef(null);
   const refreshPlacement = useCallback(() => hint.current?.(), []);
@@ -25,6 +26,7 @@ export function useRoomPlacement(api, initial) {
         const next = await api('/meetings/' + meeting.id + '/placement', {
           method: 'POST', body: { key: routingKey, roomId }, signal: controller.signal,
         });
+        if (!controller.signal.aborted && next.coHosts) setCoHosts(next.coHosts);
         if (!controller.signal.aborted && next.token && next.roomId !== roomId) {
           keepChecking = false;
           setSession(current => ({
@@ -53,5 +55,5 @@ export function useRoomPlacement(api, initial) {
     };
   }, [api, roomId, routingKey, meeting.id, ended]);
 
-  return { session, ended, refreshPlacement };
+  return { session, ended, coHosts, refreshPlacement };
 }

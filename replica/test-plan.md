@@ -34,6 +34,10 @@
 | F18-H1 | Host captions appear for a guest. The guest can hide the overlay and save caption history as text | Four-client guest-meeting smoke test |
 | F24-H1 | A decline blocks recording. After affirmative consent, the host can capture and save a WebM when the guest withdraws consent | Four-client guest-meeting smoke test |
 | F24-N1 | Joining an active meeting stops the existing recorder without capturing an unapproved session | Four-client guest-meeting smoke test checks the stop and the newcomer has no recording notice |
+| F25-H1 | A host delegates moderation to a connected signed-in attendee, who can admit, lock, and manage breakouts until revoked | API and four-client guest-meeting smoke tests |
+| F25-N1 | Delegation and ending the meeting require the owner. Revocation and a new connection invalidate old grants. Accountless attendees are ineligible | API tests and live revocation in the guest-meeting smoke test |
+| F26-H1 | Bulk mute targets attendee microphones and preserves moderator microphones and presentation audio | API and four-client guest-meeting smoke tests |
+| F27-H1 | A moderator stops an attendee camera and sends a private microphone prompt. Only the attendee can accept the prompt and turn on their microphone | API and four-client guest-meeting smoke tests |
 | F12-P1 | 100-person load, 30-hour duration, and production availability | Deployment-scale verification |
 
 Run `npm test` for the API suite. The RTC tests use two isolated browser pages and a real loopback LiveKit server. The desktop test is aimed at the Windows development build.

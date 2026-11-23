@@ -232,6 +232,7 @@
   .caption-history li { margin-bottom: 6px; }
   .caption-history time { color: var(--muted); font-size: .75rem; }
   .host-actions, .waiting-list { padding: 12px; border-bottom: 1px solid var(--line); }
+  .host-actions { display: flex; flex-wrap: wrap; gap: 6px; }
   .waiting-list h3 { color: var(--accent); margin-bottom: 8px; }
   .waiting-person { display: flex; gap: 6px; flex-direction: column; font-size: .82rem; padding: 7px 0; }
   .waiting-person small { display: block; color: var(--muted); font-weight: 400; }

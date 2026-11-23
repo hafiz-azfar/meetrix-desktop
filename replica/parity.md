@@ -1,4 +1,4 @@
-# Meetrix 0.1.7 feature comparison
+# Meetrix 0.1.8 feature comparison
 
 | Area | Meetrix coverage | Remaining scope |
 |---|---|---|
@@ -6,14 +6,14 @@
 | Desktop preferences | Light, dark and system themes, chat text size and announcements, reduced motion, and remappable in-app meeting shortcuts | Theme accents, tray behavior, background notifications, and caption styling preferences |
 | Media preferences | Microphone meter, test tone and volume, noise reduction, mirrored camera preview, and screen-share frame rate and content options | Microphone replay, virtual backgrounds, audio profiles, native driver and hardware options, and computer audio capture |
 | In-call display and diagnostics | Fullscreen, elapsed-time display, participant filters, local camera pause, presentation layout, and per-track WebRTC samples | Dual-window layouts, richer network diagnostics, configurable push-to-talk, and a diagnostic export |
-| Collaboration | In-room chat, raised hands, reactions, polls, whiteboard, shared notes, and host-managed breakout rooms | Persistent team chat and attachments. Breakouts still lack pre-assignment, self-selection, co-host management, countdowns, and voice broadcasts |
-| Host controls | Lobby, passcode, lock, admit/decline, mute, remove, and end | Co-host roles, organization-wide policy, and independent security evaluation |
+| Collaboration | In-room chat, raised hands, reactions, polls, whiteboard, shared notes, and breakout rooms managed by hosts and co-hosts | Persistent team chat and attachments. Breakouts still lack pre-assignment, self-selection, countdowns, and voice broadcasts |
+| Host controls | Lobby, passcode, lock, admit/decline, individual and bulk mute, ask to unmute, stop camera, remove, end, and revocable co-host access | Host transfer, waiting room re-entry, organization-wide policy, and independent security evaluation |
 | Recording and captions | Local host WebM with participant consent, host-typed captions, per-viewer overlay control, and caption history export | Cloud recording, automatic and translated captions, assigned captioners, and long-form recordings |
 | Pro meeting features | 30-hour room cap, 100-participant configuration, and optional end-to-end encryption | Capacity/load verification and AI notes |
 | Workplace suite | Desktop and web meeting workspaces | Mail, calendar sync, Canvas, Clips, Tasks, and booking pages |
 
-**Reference coverage.** The earlier research covered the home, join, scheduling, and breakout-room workflows. Zoom documents manual captioning and computer recording. [Managing breakout rooms](https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0062540) · [Manual captions](https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0062000) · [Computer recording](https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0076922) · [Zoom Workplace Pro](https://www.zoom.com/en/products/collaboration-tools/zoom-workplace-pro/)
+**Reference coverage.** The comparison covers home, join, scheduling, breakout rooms, manual captions, recording, and co-host workflows. [Host and co-host controls](https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0065164) · [Managing breakout rooms](https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0062540) · [Manual captions](https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0062000) · [Computer recording](https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0076922) · [Zoom Workplace Pro](https://www.zoom.com/en/products/collaboration-tools/zoom-workplace-pro/)
 
-**Verification scope.** API tests cover admission, breakout grants, removal, and room cleanup. Four browser clients use the bundled LiveKit server to test room assignment, chat isolation, return to the main meeting, captions, and recording consent. Audio and video devices are synthetic. See [the test plan](test-plan.md) for commands and scope.
+**Verification scope.** API tests cover admission, breakout grants, removal, room cleanup, and co-host authorization and revocation. Four browser clients use the bundled LiveKit server to exercise breakout assignment, chat isolation, captions, recording consent, co-host delegation, and bulk mute. Audio and video devices are synthetic. See [the test plan](test-plan.md) for commands and scope.
 
 **Release status.** Scheduling includes a downloadable calendar file and shareable link. Automatic invite email and calendar synchronization remain open. Workplace-wide coverage, production capacity, and operating controls need additional implementation and verification.

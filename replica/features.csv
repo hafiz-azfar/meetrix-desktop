@@ -15,7 +15,7 @@ F13,Collaboration,Meeting notes and export,should,yes,yes,Manual shared notes in
 F14,Pro,Cloud recording and storage,should,yes,no,Requires Egress and private storage
 F15,Pro,AI note-taking and summaries,should,yes,no,Requires consent and transcription plus model provider
 F16,Pro,Recurring scheduling and calendar sync,should,yes,partial,Weekly recurrence and rescheduling with manual ICS export
-F17,Pro,Whiteboard and breakout rooms,should,yes,partial,Shared whiteboard and host-managed breakout rooms with text announcements
+F17,Pro,Whiteboard and breakout rooms,should,yes,partial,Shared whiteboard and host or co-host breakout management with text announcements
 F18,Pro,Live captions and translation,should,yes,partial,Host-typed captions with a local overlay and text export
 F19,Workplace,Team chat mail and phone,could,yes,no,
 F20,Workplace,Canvas clips tasks and booking pages,could,yes,no,
@@ -23,3 +23,6 @@ F21,Workplace,Admin console large scale support,could,yes,no,
 F22,Collaboration,In-room polls,should,yes,yes,One vote per account and host-controlled closing
 F23,Meetings,Select audio and video devices before or during a call,should,yes,yes,Speaker selection depends on browser support
 F24,Meetings,Local meeting recording,should,yes,yes,Host WebM recording with per-request participant consent
+F25,Meetings,Co-host participant management,should,yes,yes,Connection-bound delegation for moderation and breakouts in standard rooms
+F26,Meetings,Mute all attendees,should,yes,yes,Mutes attendee microphones in the main room
+F27,Meetings,Ask to unmute and stop attendee video,should,yes,yes,Moderators can stop camera tracks and send a targeted microphone request

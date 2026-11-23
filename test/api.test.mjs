@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { TokenVerifier } from 'livekit-server-sdk';
+import { ParticipantInfo_State, TokenVerifier, TrackSource } from 'livekit-server-sdk';
 import { createApp } from '../server/app.mjs';
 import { insforgeSettings } from '../server/auth.mjs';
 import { readConfig } from '../server/config.mjs';
@@ -13,16 +13,24 @@ const livekitSecret = 'not-a-real-secret-at-least-32-bytes';
 
 async function fixture(t) {
   const calls = [];
+  const livePeople = new Map();
   const rooms = {
     async createRoom(details) { calls.push(['open', details]); },
     async deleteRoom(id) { calls.push(['end', id]); },
     async removeParticipant(id, identity) { calls.push(['remove', id, identity]); },
+    async getParticipant(_id, identity) {
+      if (!livePeople.has(identity)) throw Object.assign(new Error('Participant is absent'), { status: 404 });
+      return livePeople.get(identity);
+    },
+    async listParticipants() { return [...livePeople.values()]; },
+    async mutePublishedTrack(id, identity, sid) { calls.push(['mute', id, identity, sid]); },
+    async sendData(room, _data, _kind, options) { calls.push(['data', room, options]); },
   };
   const { app, close } = createApp({
     origin, insforgeUrl, livekitKey, livekitSecret,
     livekitUrl: 'wss://livekit.meetrix.test', databasePath: ':memory:',
   }, { rooms, authenticate: async token => {
-    if (!['owner', 'guest', 'stranger'].includes(token)) throw Error('Bad session');
+    if (!['owner', 'guest', 'stranger', 'attendee'].includes(token)) throw Error('Bad session');
     return token;
   } });
   const server = app.listen(0, '127.0.0.1');
@@ -44,7 +52,7 @@ async function fixture(t) {
   const create = input => api('/meetings', { method: 'POST', body: { title: 'Roadmap', name: 'Owner', ...input } });
   const connect = (id, token, input = {}) => api('/meetings/' + id + '/connect', { method: 'POST', token, body: { name: token, ...input } });
   const moderate = (id, body, token = 'owner') => api('/meetings/' + id + '/moderate', { method: 'POST', body, token });
-  return { api, create, connect, moderate, calls };
+  return { api, create, connect, moderate, calls, livePeople };
 }
 
 test('InsForge and LiveKit production configuration are pinned', () => {
@@ -195,7 +203,7 @@ test('breakout grants are limited to an admitted guest and one active room', asy
   assert.equal((await api(path, { token: 'guest', method: 'POST', body: { action: 'announce', text: 'Guest message' } })).status, 403);
   assert.equal((await open([...plan, { name: 'Observer', members: ['guest'] }])).status, 400);
   assert.equal((await open([{ name: 'Hosts', members: ['owner'] }])).status, 404);
-  assert.deepEqual((await place(guest.routingKey, meeting.id)).json, { roomId: meeting.id });
+  assert.deepEqual((await place(guest.routingKey, meeting.id)).json, { roomId: meeting.id, coHosts: [] });
   const retry = (await connect(meeting.id, 'guest')).json;
   assert.notEqual(retry.routingKey, guest.routingKey);
   assert.equal((await place(guest.routingKey, meeting.id)).status, 200);
@@ -236,6 +244,89 @@ test('breakout grants are limited to an admitted guest and one active room', asy
     method: 'POST', body: { action: 'open', rooms: plan },
   });
   assert.equal(encryptedAttempt.status, 403);
+});
+
+test('co-hosts can moderate only while their assigned LiveKit session is connected', async t => {
+  const { api, create, connect, moderate, calls, livePeople } = await fixture(t);
+  const { id } = (await create({ allowGuests: true })).json;
+  const path = '/meetings/' + id;
+  const grant = (identity, sid, enabled = true, token = 'owner') => moderate(id, { action: 'co-host', identity, sid, enabled }, token);
+  const lobby = token => api(path + '/lobby', { token });
+  const admit = (identity, token = 'owner') => moderate(id, { action: 'decide', identity, admit: true }, token);
+  const publish = (identity, sid, mic = false) => livePeople.set(identity, {
+    identity, sid, state: ParticipantInfo_State.ACTIVE,
+    tracks: mic ? [{ sid: 'TR_mic', source: TrackSource.MICROPHONE }, { sid: 'TR_cam', source: TrackSource.CAMERA },
+      { sid: 'TR_share', source: TrackSource.SCREEN_SHARE_AUDIO }] : [],
+  });
+  await connect(id, 'owner');
+  await connect(id, 'guest');
+  await admit('guest');
+  const guest = (await connect(id, 'guest')).json;
+  assert.equal((await grant('guest', 'PA_guest')).status, 409);
+  publish('guest', 'PA_guest', true);
+  assert.equal((await grant('guest', 'PA_stale')).status, 409);
+  assert.equal((await grant('guest', 'PA_guest', true, 'guest')).status, 403);
+  assert.equal((await lobby('guest')).status, 403);
+  assert.deepEqual((await grant('guest', 'PA_guest')).json.coHosts, [{ identity: 'guest', sid: 'PA_guest' }]);
+
+  const other = (await create({ lobby: false })).json;
+  assert.equal((await api('/meetings/' + other.id + '/lobby', { token: 'guest' })).status, 403);
+  const placement = await api(path + '/placement', { token: '', method: 'POST', body: { key: guest.routingKey, roomId: id } });
+  assert.deepEqual(placement.json.coHosts, [{ identity: 'guest', sid: 'PA_guest' }]);
+  const claims = await new TokenVerifier(livekitKey, livekitSecret).verify((await connect(id, 'guest')).json.token);
+  assert.equal(Boolean(claims.video.roomAdmin), false);
+  assert.equal(claims.video.canUpdateOwnMetadata, false);
+
+  const accountless = await api(path + '/guest', {
+    token: '', method: 'POST', body: { proof: 'cf32b52d0e134150b3ccf8c27bc23e46', name: 'Guest via invite' },
+  });
+  assert.equal(accountless.status, 200);
+  assert.equal(accountless.json.state, 'waiting');
+  const pending = (await lobby('guest')).json.guests[0];
+  assert.equal(pending.accountless, true);
+  await admit(pending.identity, 'guest');
+  publish(pending.identity, 'PA_accountless');
+  assert.equal((await grant(pending.identity, 'PA_accountless')).status, 403);
+  assert.equal((await moderate(id, { action: 'lock', locked: true }, 'guest')).status, 200);
+  assert.equal((await moderate(id, { action: 'lock', locked: false }, 'guest')).status, 200);
+
+  for (const identity of ['stranger', 'attendee']) {
+    await connect(id, identity);
+    await admit(identity, 'guest');
+    publish(identity, 'PA_' + identity, true);
+  }
+  publish('owner', 'PA_owner', true);
+  assert.equal((await grant('stranger', 'PA_stranger', true, 'guest')).status, 403);
+  assert.equal((await grant('stranger', 'PA_stranger')).status, 200);
+  for (const identity of ['owner', 'guest', 'stranger']) {
+    assert.equal((await moderate(id, { action: 'remove', identity }, 'guest')).status, 403);
+    assert.equal((await moderate(id, { action: 'mute', identity }, 'guest')).status, 403);
+  }
+  assert.equal((await moderate(id, { action: 'end' }, 'guest')).status, 403);
+  assert.equal((await moderate(id, { action: 'mute-all' }, 'guest')).status, 200);
+  assert.deepEqual(calls.filter(call => call[0] === 'mute'), [['mute', id, 'attendee', 'TR_mic']]);
+  assert.equal((await moderate(id, { action: 'stop-video', identity: 'owner' }, 'guest')).status, 403);
+  assert.equal((await moderate(id, { action: 'stop-video', identity: 'attendee' }, 'guest')).status, 200);
+  assert.deepEqual(calls.at(-1), ['mute', id, 'attendee', 'TR_cam']);
+  assert.equal((await moderate(id, { action: 'ask-unmute', identity: 'stranger' }, 'guest')).status, 403);
+  assert.equal((await moderate(id, { action: 'ask-unmute', identity: 'attendee' }, 'guest')).status, 200);
+  assert.deepEqual(calls.at(-1), ['data', id, { topic: 'meetrix.microphone-request', destinationIdentities: ['attendee'] }]);
+
+  const breakout = members => api(path + '/breakouts', {
+    token: 'guest', method: 'POST', body: { action: 'open', rooms: [{ name: 'Review', members }] },
+  });
+  assert.equal((await breakout(['stranger'])).status, 409);
+  assert.equal((await breakout(['attendee'])).status, 200);
+  assert.equal((await api(path + '/breakouts', { token: 'guest', method: 'POST', body: { action: 'close' } })).status, 200);
+  publish('guest', 'PA_reconnected');
+  assert.equal((await lobby('guest')).status, 403);
+  assert.equal((await moderate(id, { action: 'lock', locked: true }, 'guest')).status, 403);
+  assert.equal((await grant('guest', 'PA_reconnected')).status, 200);
+  assert.equal((await grant('guest', 'PA_guest', false)).status, 200);
+  assert.equal((await lobby('guest')).status, 200);
+  assert.equal((await grant('guest', 'PA_reconnected', false)).status, 200);
+  assert.equal((await lobby('guest')).status, 403);
+  assert.equal((await moderate(id, { action: 'lock', locked: true }, 'guest')).status, 403);
 });
 
 test('shared notes require access and reject stale writes; encrypted rooms skip stored notes', async t => {

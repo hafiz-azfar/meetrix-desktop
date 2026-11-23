@@ -7,7 +7,7 @@ import { ConnectionState, RoomEvent, ScreenSharePresets, Track } from 'livekit-c
 import { createEncryptedRoom } from './encrypted-room.js';
 import {
   Captions, ChartNoAxesColumn, CircleDot, Clipboard, FileText, Grid2X2, Hand, Lock, LockOpen, MessageSquare, Mic, MicOff, MonitorUp, SmilePlus,
-  Gauge, Maximize, PanelsTopLeft, PenTool, PhoneOff, Send, Settings2, ShieldCheck, SlidersHorizontal, UserMinus, Users, Video, VideoOff, X,
+  Gauge, Maximize, PanelsTopLeft, PenTool, PhoneOff, Send, Settings2, ShieldCheck, ShieldMinus, ShieldPlus, SlidersHorizontal, UserMinus, Users, Video, VideoOff, X,
 } from 'lucide-react';
 import { invitation } from './api.js';
 import { Notes } from './notes.jsx';
@@ -26,6 +26,7 @@ import { placementTopic, useRoomPlacement } from './room-placement.js';
 const videoOptions = { adaptiveStream: true, dynacast: true, stopLocalTrackOnUnpublish: true };
 const messageTopic = 'meetrix.meeting';
 const breakoutMessageTopic = 'meetrix.breakout-announcement';
+const microphoneRequestTopic = 'meetrix.microphone-request';
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const reactions = ['👍', '👏', '🎉', '❤️'];
@@ -45,10 +46,10 @@ export function Conference({ session, api, prefs, updatePrefs, onLeave }) {
     <button className="button" onClick={onLeave}>Return to workspace</button>
   </main>;
   return <ConferenceConnection key={placement.session.roomId} session={placement.session} api={api}
-    prefs={prefs} updatePrefs={updatePrefs} onLeave={onLeave} refreshPlacement={placement.refreshPlacement} />;
+    prefs={prefs} updatePrefs={updatePrefs} onLeave={onLeave} coHosts={placement.coHosts} refreshPlacement={placement.refreshPlacement} />;
 }
 
-function ConferenceConnection({ session, api, prefs, updatePrefs, onLeave, refreshPlacement }) {
+function ConferenceConnection({ session, api, prefs, updatePrefs, onLeave, coHosts, refreshPlacement }) {
   const [error, setError] = useState('');
   const [secureRoom, setSecureRoom] = useState(null);
   useEffect(() => {
@@ -67,12 +68,12 @@ function ConferenceConnection({ session, api, prefs, updatePrefs, onLeave, refre
   return <LiveKitRoom room={secureRoom || undefined} serverUrl={session.serverUrl} token={session.token} audio={false} video={false}
     options={secureRoom ? undefined : videoOptions} onError={error => setError(error.message || 'Could not connect to the room.')}>
     <Call session={session} api={api} prefs={prefs} updatePrefs={updatePrefs} onLeave={onLeave}
-      connectionError={error} refreshPlacement={refreshPlacement} />
+      connectionError={error} coHosts={coHosts} refreshPlacement={refreshPlacement} />
     <RoomAudioRenderer volume={prefs.speakerVolume} />
   </LiveKitRoom>;
 }
 
-function Tile({ participant, isHost, raised, mirror, showNames, pauseCamera }) {
+function Tile({ participant, role, raised, mirror, showNames, pauseCamera }) {
   const publication = participant.getTrackPublication(Track.Source.Camera);
   const showVideo = !pauseCamera && publication?.track && !publication.isMuted;
   const name = participant.name || 'Guest';
@@ -81,7 +82,7 @@ function Tile({ participant, isHost, raised, mirror, showNames, pauseCamera }) {
       trackRef={{ participant, publication, source: Track.Source.Camera }} />
       : <span className="tile-avatar">{initials(name)}</span>}
     <div className="tile-label" hidden={!showNames && !raised && participant.isMicrophoneEnabled}>
-      {raised && <Hand size={15} />} {showNames && <>{name}{participant.isLocal && ' (you)'}{isHost && <small>Host</small>}</>}
+      {raised && <Hand size={15} />} {showNames && <>{name}{participant.isLocal && ' (you)'}{role && <small>{role}</small>}</>}
       {!participant.isMicrophoneEnabled && <MicOff size={14} />}
     </div>
   </article>;
@@ -100,7 +101,7 @@ function ElapsedTime({ joinedAt }) {
   return <time title="Time connected" className="call-timer">{hours ? hours + ':' : ''}{minutes}:{seconds}</time>;
 }
 
-function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, refreshPlacement }) {
+function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, coHosts, refreshPlacement }) {
   const room = useRoomContext();
   const connection = useConnectionState();
   const { localParticipant, isCameraEnabled, isMicrophoneEnabled, isScreenShareEnabled } = useLocalParticipant();
@@ -112,6 +113,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, refr
   const [error, setError] = useState('');
   const [toast, setToast] = useState(session.roomNotice || '');
   const [confirmation, setConfirmation] = useState(false);
+  const [microphoneRequest, setMicrophoneRequest] = useState(false);
   const [settings, setSettings] = useState(false);
   const [viewOptions, setViewOptions] = useState(false);
   const [fullscreen, setFullscreen] = useState(Boolean(document.fullscreenElement));
@@ -119,6 +121,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, refr
   const [pending, setPending] = useState(false);
   const [joinedAt, setJoinedAt] = useState(null);
   const [guests, setGuests] = useState([]);
+  const [hostRoleSnapshot, setHostRoleSnapshot] = useState(coHosts);
   const [locked, setLocked] = useState(session.meeting.locked);
   const [chat, setChat] = useState([]);
   const [hands, setHands] = useState({});
@@ -133,6 +136,12 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, refr
   const ended = joinedAt != null && connection === ConnectionState.Disconnected;
   const collaboration = !session.meeting.encrypted && !session.accountless && !session.breakoutName;
   const meetingTools = !session.meeting.encrypted && !session.breakoutName;
+  const delegates = new Map((host ? hostRoleSnapshot : coHosts).map(({ identity, sid }) => [identity, sid]));
+  const isCoHost = participant => !!participant.sid && delegates.get(participant.identity) === participant.sid;
+  const roleOf = participant => participant.identity === session.hostIdentity ? 'Host' : isCoHost(participant) ? 'Co-host' : '';
+  const coHost = online && meetingTools && !session.accountless && isCoHost(localParticipant);
+  const canModerate = host || coHost;
+  const canManageBreakouts = meetingTools && canModerate;
   const captions = useManualCaptions(room, { enabled: meetingTools, hostIdentity: session.hostIdentity });
   const recording = useMeetingRecording(room, { enabled: meetingTools, hostIdentity: session.hostIdentity, host, meetingId: id });
 
@@ -183,24 +192,37 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, refr
   }, []);
 
   useEffect(() => {
-    if (!host || ended) return;
-    let stopped = false;
+    if (!canModerate || ended) return;
+    const controller = new AbortController();
     let timer;
     async function update() {
       try {
-        const result = await api('/meetings/' + id + '/lobby');
-        if (!stopped) { setGuests(result.guests); setLocked(result.locked); }
-      } catch (failure) { if (!stopped && failure.status === 401) setError(failure.message); }
-      if (!stopped) timer = setTimeout(update, 4000);
+        const result = await api('/meetings/' + id + '/lobby', { signal: controller.signal });
+        if (!controller.signal.aborted) {
+          setGuests(result.guests);
+          setLocked(result.locked);
+          if (host && result.coHosts) setHostRoleSnapshot(result.coHosts);
+        }
+      } catch (failure) { if (!controller.signal.aborted && failure.status === 401) setError(failure.message); }
+      if (!controller.signal.aborted) timer = setTimeout(update, 4000);
     }
     update();
-    return () => { stopped = true; clearTimeout(timer); };
-  }, [api, id, host, ended]);
+    return () => { controller.abort(); clearTimeout(timer); };
+  }, [api, id, canModerate, ended, host]);
 
   useEffect(() => {
-    function receive(payload, participant, _kind, topic) {
-      if (!participant && topic === placementTopic) { refreshPlacement(); return; }
-      if (!participant && topic === breakoutMessageTopic && session.breakoutName && payload.byteLength <= 1200) {
+    if (!canManageBreakouts) setPanel(previous => previous === 'breakouts' ? 'people' : previous);
+  }, [canManageBreakouts]);
+
+  useEffect(() => {
+    function receive(payload, participant, _kind, topic, _encryption, senderIdentity) {
+      const serverPacket = !participant && !senderIdentity;
+      if (serverPacket && topic === placementTopic) { refreshPlacement(); return; }
+      if (serverPacket && topic === microphoneRequestTopic && meetingTools && payload.byteLength === 1 && payload[0] === 1) {
+        if (!room.localParticipant.isMicrophoneEnabled) setMicrophoneRequest(true);
+        return;
+      }
+      if (serverPacket && topic === breakoutMessageTopic && session.breakoutName && payload.byteLength <= 1200) {
         const text = decoder.decode(payload).trim();
         if (text && text.length <= 300) setToast('Host announcement · ' + text);
         return;
@@ -232,7 +254,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, refr
       room.off(RoomEvent.ParticipantDisconnected, remove);
       room.off(RoomEvent.Disconnected, refreshPlacement);
     };
-  }, [room, refreshPlacement, session.breakoutName]);
+  }, [room, refreshPlacement, session.breakoutName, meetingTools]);
   useEffect(() => { chartEnd.current?.scrollIntoView({ block: 'nearest' }); }, [chat, panel]);
   useEffect(() => {
     if (!reaction) return;
@@ -268,9 +290,12 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, refr
 
   async function moderate(command) {
     return run(async () => {
-      await api('/meetings/' + id + '/moderate', { method: 'POST', body: command });
+      const result = await api('/meetings/' + id + '/moderate', { method: 'POST', body: command });
+      if (host && result.coHosts) setHostRoleSnapshot(result.coHosts);
       if (command.action === 'decide') setGuests(previous => previous.filter(guest => guest.identity !== command.identity));
       if (command.action === 'lock') setLocked(command.locked);
+      if (command.action === 'mute-all') setToast('Attendee microphones muted.');
+      if (command.action === 'ask-unmute') setToast('Microphone request sent.');
     });
   }
 
@@ -303,6 +328,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, refr
   function toggleLayout() { setLayout(previous => previous === 'grid' ? 'speaker' : 'grid'); }
 
   function toggleMicrophone() {
+    setMicrophoneRequest(false);
     return run(() => localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled, microphoneOptions(prefs)));
   }
 
@@ -360,7 +386,8 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, refr
   return <main className="call">
     <header className="call-header"><Logo /><div className="call-title"><strong>{session.meeting.title}</strong><span><i className="status-dot" />{ended ? 'Disconnected' : online ? 'Connected' : connection === ConnectionState.Reconnecting ? 'Reconnecting' : 'Connecting'}
       {online && prefs.meetingTimer && joinedAt && <ElapsedTime joinedAt={joinedAt} />}
-    </span>{session.breakoutName && <span className="breakout-indicator">Breakout · {session.breakoutName}</span>}</div>
+    </span>{session.breakoutName && <span className="breakout-indicator">Breakout · {session.breakoutName}</span>}
+      {coHost && <span className="breakout-indicator" role="status">You’re a co-host</span>}</div>
       <div className="call-header-actions">
         {session.meeting.encrypted && <span className="button subtle"><ShieldCheck size={16} /> Encrypted media</span>}
         <button className="button" disabled={!online} onClick={() => setSettings(true)}><Settings2 size={16} /> Devices</button>
@@ -376,6 +403,11 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, refr
       <span>{error || connectionError || (ended ? 'You are disconnected from this room.' : toast)}</span>
       {(error || toast) && <button className="icon-button" aria-label="Dismiss notice" onClick={() => { setError(''); setToast(''); }}><X size={17} /></button>}
     </div>}
+    {online && microphoneRequest && !isMicrophoneEnabled && <div className="call-notice" role="status">
+      <span>A moderator asked you to turn on your microphone.</span>
+      <div className="meeting-tool-actions"><button className="button primary small" onClick={toggleMicrophone}>Turn on microphone</button>
+        <button className="button small" onClick={() => setMicrophoneRequest(false)}>Dismiss request</button></div>
+    </div>}
     {meetingTools && <RecordingBanner recording={recording} host={host} />}
     <div className="call-body">
       {reaction && <div className="reaction-toast" role="status"><span>{reaction.emoji}</span> {reaction.from}</div>}
@@ -385,19 +417,36 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, refr
         {online && !display.length && !activeShare && <div className="empty"><VideoOff size={28} /><strong>There are no visible participant tiles.</strong></div>}
         <div className="tile-grid" style={{ '--tiles': Math.min(3, Math.max(1, display.length)) }}>
           {display.map(participant => <Tile key={participant.identity} participant={participant}
-            isHost={participant.identity === session.hostIdentity} raised={hands[participant.identity]} mirror={prefs.mirrorCamera}
+            role={roleOf(participant)} raised={hands[participant.identity]} mirror={prefs.mirrorCamera}
             showNames={prefs.showNames} pauseCamera={prefs.pauseIncomingCameras && !participant.isLocal} />)}
         </div>
       </section>{meetingTools && !ended && <CaptionsOverlay captions={captions} />}</div>
       {panel && <aside className="call-side"><div className="dialog-head"><h2>{panelTitles[panel]}</h2><button className="icon-button" aria-label="Close panel" onClick={() => setPanel('')}><X size={18} /></button></div>
         {panel === 'people' && <>
-          {host && <div className="host-actions"><button className="button" onClick={() => moderate({ action: 'lock', locked: !locked })}>{locked ? <Lock size={16} /> : <LockOpen size={16} />}{locked ? 'Unlock room' : 'Lock room'}</button></div>}
-          {host && guests.length > 0 && <div className="waiting-list"><h3>Waiting room · {guests.length}</h3>{guests.map(guest => <div className="waiting-person" key={guest.identity}><strong>{guest.name}{guest.accountless && <small>Unverified guest</small>}</strong><div><button className="button primary small" onClick={() => moderate({ action: 'decide', identity: guest.identity, admit: true })}>Admit</button><button className="button small" onClick={() => moderate({ action: 'decide', identity: guest.identity, admit: false })}>Decline</button></div></div>)}</div>}
+          {canModerate && <div className="host-actions">
+            <button className="button" onClick={() => moderate({ action: 'lock', locked: !locked })}>{locked ? <Lock size={16} /> : <LockOpen size={16} />}{locked ? 'Unlock room' : 'Lock room'}</button>
+            <button className="button" disabled={!online} onClick={() => moderate({ action: 'mute-all' })}><MicOff size={16} /> Mute attendees</button>
+          </div>}
+          {canModerate && guests.length > 0 && <div className="waiting-list"><h3>Waiting room · {guests.length}</h3>{guests.map(guest => <div className="waiting-person" key={guest.identity}><strong>{guest.name}{guest.accountless && <small>Unverified guest</small>}</strong><div><button className="button primary small" onClick={() => moderate({ action: 'decide', identity: guest.identity, admit: true })}>Admit</button><button className="button small" onClick={() => moderate({ action: 'decide', identity: guest.identity, admit: false })}>Decline</button></div></div>)}</div>}
           <div className="people-list">{participants.map(participant => <div className="person" key={participant.identity}><span className="person-avatar">{initials(participant.name || 'Guest')}</span>
-            <div><strong>{participant.name || 'Guest'}{participant.isLocal && ' (you)'}</strong>{participant.identity === session.hostIdentity && <small>Host</small>}{participant.identity.startsWith('guest_') && <small>Unverified guest</small>}</div>
+            <div><strong>{participant.name || 'Guest'}{participant.isLocal && ' (you)'}</strong>{roleOf(participant) && <small>{roleOf(participant)}</small>}{participant.identity.startsWith('guest_') && <small>Unverified guest</small>}</div>
             {hands[participant.identity] && <Hand size={16} />}
-            {host && !participant.isLocal && <>
-              <button className="icon-button" title="Mute participant" aria-label={'Mute ' + participant.name} onClick={() => moderate({ action: 'mute', identity: participant.identity })}><MicOff size={17} /></button>
+            {host && meetingTools && !participant.isLocal && !participant.identity.startsWith('guest_') && <button className="icon-button" disabled={!online || !participant.sid}
+              title={isCoHost(participant) ? 'Revoke co-host access' : 'Make co-host'}
+              aria-label={(isCoHost(participant) ? 'Revoke co-host access for ' : 'Make co-host: ') + participant.name}
+              onClick={() => {
+                const enabled = !isCoHost(participant);
+                if (enabled && !window.confirm('Let ' + (participant.name || 'this participant') + ' manage attendees, the waiting room, and breakout rooms?')) return;
+                moderate({ action: 'co-host', identity: participant.identity, sid: participant.sid, enabled });
+              }}>
+              {isCoHost(participant) ? <ShieldMinus size={17} /> : <ShieldPlus size={17} />}
+            </button>}
+            {canModerate && !participant.isLocal && (host || !roleOf(participant)) && <>
+              {participant.isMicrophoneEnabled || !meetingTools
+                ? <button className="icon-button" title="Mute participant" aria-label={'Mute ' + participant.name} onClick={() => moderate({ action: 'mute', identity: participant.identity })}><MicOff size={17} /></button>
+                : <button className="icon-button" title="Ask to unmute" aria-label={'Ask ' + participant.name + ' to unmute'} onClick={() => moderate({ action: 'ask-unmute', identity: participant.identity })}><Mic size={17} /></button>}
+              {participant.isCameraEnabled && <button className="icon-button" title="Stop camera" aria-label={'Stop camera for ' + participant.name}
+                onClick={() => moderate({ action: 'stop-video', identity: participant.identity })}><VideoOff size={17} /></button>}
               <button className="icon-button" title="Remove participant" aria-label={'Remove ' + participant.name} onClick={() => {
                 if (window.confirm('Remove this participant and block them from rejoining?')) moderate({ action: 'remove', identity: participant.identity });
               }}><UserMinus size={17} /></button>
@@ -415,7 +464,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, refr
         {panel === 'quality' && <CallStatistics room={room} online={online} />}
         {panel === 'captions' && <CaptionsPanel captions={captions} host={host} online={online} meetingId={id} />}
         {panel === 'recording' && <RecordingPanel recording={recording} participants={participants} online={online} />}
-        {panel === 'breakouts' && <BreakoutRooms api={api} meetingId={id} participants={participants}
+        {panel === 'breakouts' && canManageBreakouts && <BreakoutRooms api={api} meetingId={id} participants={participants.filter(participant => !roleOf(participant))}
           removeParticipant={identity => moderate({ action: 'remove', identity })} />}
       </aside>}
     </div>
@@ -424,11 +473,11 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, refr
       <button className="call-control" disabled={!online} aria-pressed={isMicrophoneEnabled} onClick={toggleMicrophone}>{isMicrophoneEnabled ? <Mic size={20} /> : <MicOff size={20} />}<span>{isMicrophoneEnabled ? 'Mute' : 'Unmute'}</span></button>
       <button className="call-control" disabled={!online} aria-pressed={isCameraEnabled} onClick={toggleCamera}>{isCameraEnabled ? <Video size={20} /> : <VideoOff size={20} />}<span>Camera</span></button>
       <button className="call-control" disabled={!online} aria-pressed={isScreenShareEnabled} onClick={toggleShare}><MonitorUp size={20} /><span>{isScreenShareEnabled ? 'Stop share' : 'Share'}</span></button>
-      <button className="call-control" aria-pressed={panel === 'people'} onClick={() => togglePanel('people')}><Users size={20} /><span>People {participants.length + guests.length}</span></button>
+      <button className="call-control" aria-pressed={panel === 'people'} onClick={() => togglePanel('people')}><Users size={20} /><span>People {participants.length + (canModerate ? guests.length : 0)}</span></button>
       <button className="call-control" aria-pressed={panel === 'chat'} onClick={() => togglePanel('chat')}><MessageSquare size={20} /><span>Chat</span></button>
       {meetingTools && <button className="call-control" aria-pressed={panel === 'captions'} onClick={() => togglePanel('captions')}><Captions size={20} /><span>Captions</span></button>}
       {meetingTools && host && <button className="call-control" aria-pressed={panel === 'recording'} onClick={() => togglePanel('recording')}><CircleDot size={20} /><span>Record</span></button>}
-      {host && !session.meeting.encrypted && <button className="call-control" disabled={!online}
+      {canManageBreakouts && <button className="call-control" disabled={!online}
         aria-pressed={panel === 'breakouts'} onClick={() => togglePanel('breakouts')}>
         <PanelsTopLeft size={20} /><span>Breakouts</span>
       </button>}

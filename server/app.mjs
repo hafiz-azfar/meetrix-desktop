@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import express from 'express';
 import helmet from 'helmet';
 import { rateLimit } from 'express-rate-limit';
-import { AccessToken, DataPacket_Kind, RoomServiceClient } from 'livekit-server-sdk';
+import { AccessToken, DataPacket_Kind, ParticipantInfo_State, RoomServiceClient, TrackSource } from 'livekit-server-sdk';
 import { z } from 'zod';
 import { authenticationScope, createInsforgeAuth, insforgeSettings } from './auth.mjs';
 import { openDatabase } from './db.mjs';
@@ -45,10 +45,16 @@ const breakoutCommand = z.discriminatedUnion('action', [
 ]);
 const placementTopic = 'meetrix.room-placement';
 const breakoutMessageTopic = 'meetrix.breakout-announcement';
+const microphoneRequestTopic = 'meetrix.microphone-request';
 const moderation = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('co-host'), identity: participantIdentity,
+    sid: z.string().regex(/^PA_[A-Za-z0-9]{1,64}$/), enabled: z.boolean() }).strict(),
   z.object({ action: z.literal('decide'), identity: participantIdentity, admit: z.boolean() }).strict(),
   z.object({ action: z.literal('lock'), locked: z.boolean() }).strict(),
   z.object({ action: z.literal('mute'), identity: participantIdentity }).strict(),
+  z.object({ action: z.literal('ask-unmute'), identity: participantIdentity }).strict(),
+  z.object({ action: z.literal('stop-video'), identity: participantIdentity }).strict(),
+  z.object({ action: z.literal('mute-all') }).strict(),
   z.object({ action: z.literal('remove'), identity: participantIdentity }).strict(),
   z.object({ action: z.literal('end') }).strict(),
 ]);
@@ -112,6 +118,12 @@ export function createApp(options, dependencies = {}) {
   const queues = new Map();
   const findMeeting = db.prepare('SELECT * FROM meetings WHERE id = ?');
   const findGuest = db.prepare('SELECT * FROM attendance WHERE meeting = ? AND identity = ?');
+  const findCoHost = db.prepare('SELECT sid FROM meeting_cohosts WHERE meeting = ? AND identity = ?');
+  const listCoHosts = db.prepare('SELECT identity, sid FROM meeting_cohosts WHERE meeting = ?');
+  const grantCoHost = db.prepare(`INSERT INTO meeting_cohosts(meeting, identity, sid) VALUES(?, ?, ?)
+    ON CONFLICT(meeting, identity) DO UPDATE SET sid = excluded.sid`);
+  const revokeCoHost = db.prepare('DELETE FROM meeting_cohosts WHERE meeting = ? AND identity = ?');
+  const clearCoHosts = db.prepare('DELETE FROM meeting_cohosts WHERE meeting = ?');
   const setDecision = db.prepare('UPDATE attendance SET decision = ? WHERE meeting = ? AND identity = ?');
   const log = db.prepare('INSERT INTO audit(meeting, actor, event, subject, created_at) VALUES(?, ?, ?, ?, ?)');
   const start = db.prepare('UPDATE meetings SET opened_at = ? WHERE id = ? AND opened_at IS NULL');
@@ -185,9 +197,10 @@ export function createApp(options, dependencies = {}) {
         throw new RequestError(403, 'Your meeting session is no longer active.');
       }
       const target = currentLocation(current.id, identity);
-      if (target.roomId === input.roomId) return { roomId: target.roomId };
+      const coHosts = target.roomId === current.id ? listCoHosts.all(current.id) : [];
+      if (target.roomId === input.roomId) return { roomId: target.roomId, coHosts };
       await ensureMediaRoom(target.roomId);
-      return { ...target, token: await mediaToken(target.roomId, identity, participant.name) };
+      return { ...target, coHosts, token: await mediaToken(target.roomId, identity, participant.name) };
     });
     res.json(grant);
   });
@@ -221,6 +234,26 @@ export function createApp(options, dependencies = {}) {
   function requireHost(meeting, actor) {
     if (meeting.owner !== actor) throw new RequestError(403, 'Only the host can do that.');
   }
+  async function mainParticipant(meeting, identity) {
+    return media(async client => {
+      try {
+        const participant = await client.getParticipant(meeting.id, identity);
+        return participant?.state === ParticipantInfo_State.ACTIVE ? participant : null;
+      } catch (error) { if (isNotFound(error)) return null; throw error; }
+    });
+  }
+  async function isActiveCoHost(meeting, identity) {
+    const grant = findCoHost.get(meeting.id, identity);
+    if (!grant || findGuest.get(meeting.id, identity)?.decision !== 'admitted' || breakouts.assigned(meeting.id, identity)) return false;
+    const participant = await mainParticipant(meeting, identity);
+    return participant?.sid === grant.sid && findCoHost.get(meeting.id, identity)?.sid === grant.sid;
+  }
+  async function requireModerator(meeting, actor) {
+    if (meeting.owner === actor) return;
+    if (meetingEnded(meeting) || meeting.encrypted || !(await isActiveCoHost(meeting, actor))) {
+      throw new RequestError(403, 'Only the host or a connected co-host can do that.');
+    }
+  }
   function requireAccess(meeting, actor) {
     if (meeting.encrypted) throw new RequestError(403, 'Server-stored collaboration is disabled for encrypted meetings.');
     if (meeting.owner !== actor && findGuest.get(meeting.id, actor)?.decision !== 'admitted') {
@@ -249,6 +282,7 @@ export function createApp(options, dependencies = {}) {
       log.run(meeting.id, actor, 'end', null, Date.now());
     }
     if (meeting.cleaned_at) return;
+    clearCoHosts.run(meeting.id);
     breakouts.close(meeting.id);
     breakouts.dropMeetingKeys(meeting.id);
     if (meeting.opened_at && rooms) await deleteMediaRoom(meeting.id);
@@ -296,6 +330,10 @@ export function createApp(options, dependencies = {}) {
   function signalPlacement(room, identities) {
     return media(client => client.sendData?.(room, Uint8Array.of(1), DataPacket_Kind.RELIABLE,
       { topic: placementTopic, destinationIdentities: identities })).catch(() => {});
+  }
+  function muteTracks(client, meeting, participant, source) {
+    return Promise.all(participant.tracks.filter(track => track.source === source && !track.muted)
+      .map(track => client.mutePublishedTrack(meeting.id, participant.identity, track.sid, true)));
   }
 
   api.get('/meetings', (req, res) => {
@@ -380,7 +418,8 @@ export function createApp(options, dependencies = {}) {
       const name = isHost ? current.owner_name : findGuest.get(current.id, identity).name;
       const token = await mediaToken(location.roomId, identity, name);
       const routingKey = !isHost && !current.encrypted ? breakouts.issueKey(current.id, identity) : undefined;
-      return { state: 'ready', serverUrl: livekitUrl, token, ...location, routingKey,
+      const coHosts = !current.encrypted && location.roomId === current.id ? listCoHosts.all(current.id) : [];
+      return { state: 'ready', serverUrl: livekitUrl, token, ...location, routingKey, coHosts,
         meeting: view(findMeeting.get(current.id), identity), hostIdentity: current.owner, accountless };
     });
   }
@@ -389,12 +428,12 @@ export function createApp(options, dependencies = {}) {
     res.json(await connectMeeting(meetingFor(req), req.identity, join.parse(req.body)));
   });
 
-  api.get('/meetings/:id/lobby', (req, res) => {
+  api.get('/meetings/:id/lobby', async (req, res) => {
     const meeting = meetingFor(req);
-    requireHost(meeting, req.identity);
+    await requireModerator(meeting, req.identity);
     const guests = db.prepare("SELECT identity, name, requested_at AS requestedAt FROM attendance WHERE meeting = ? AND decision = 'pending' ORDER BY requested_at LIMIT 100")
       .all(meeting.id).map(guest => ({ ...guest, accountless: guest.identity.startsWith('guest_') }));
-    res.json({ guests, locked: !!meeting.locked });
+    res.json({ guests, locked: !!meeting.locked, coHosts: listCoHosts.all(meeting.id) });
   });
 
   function breakoutView(meeting) {
@@ -404,18 +443,18 @@ export function createApp(options, dependencies = {}) {
     })) };
   }
 
-  api.get('/meetings/:id/breakouts', (req, res) => {
+  api.get('/meetings/:id/breakouts', async (req, res) => {
     const meeting = meetingFor(req);
-    requireHost(meeting, req.identity);
+    await requireModerator(meeting, req.identity);
     res.json(breakoutView(meeting.id));
   });
 
   api.post('/meetings/:id/breakouts', byIdentity(20), async (req, res) => {
     const command = breakoutCommand.parse(req.body);
     const meeting = meetingFor(req);
-    requireHost(meeting, req.identity);
     const result = await serial(meeting.id, async () => {
       const current = findMeeting.get(meeting.id);
+      await requireModerator(current, req.identity);
       if (!current.opened_at || meetingEnded(current)) throw new RequestError(409, 'Start the meeting before managing breakout rooms.');
       if (current.encrypted) throw new RequestError(403, 'Breakout rooms are unavailable in encrypted meetings.');
       const existing = breakouts.list(current.id);
@@ -444,6 +483,9 @@ export function createApp(options, dependencies = {}) {
           throw new RequestError(400, 'Use distinct room names and assign each participant to only one room.');
         }
         for (const identity of identities) admit(current, identity);
+        for (const identity of identities) {
+          if (await isActiveCoHost(current, identity)) throw new RequestError(409, 'Connected co-hosts stay in the main meeting.');
+        }
         breakouts.open(current.id, command.rooms);
         log.run(current.id, req.identity, 'open-breakouts', null, Date.now());
         await signalPlacement(current.id, identities);
@@ -456,14 +498,36 @@ export function createApp(options, dependencies = {}) {
   api.post('/meetings/:id/moderate', byIdentity(90), async (req, res) => {
     const command = moderation.parse(req.body);
     const initial = meetingFor(req);
-    requireHost(initial, req.identity);
-    await serial(initial.id, async () => {
+    const coHosts = await serial(initial.id, async () => {
       const current = findMeeting.get(initial.id);
+      const host = current.owner === req.identity;
+      if (command.action === 'end' || command.action === 'co-host') requireHost(current, req.identity);
+      else await requireModerator(current, req.identity);
       if (command.action === 'end') {
         await disconnectRoom(current, req.identity);
-        return;
+        return [];
       }
-      if (current.stopped_at) throw new RequestError(410, 'This meeting has ended.');
+      if (meetingEnded(current)) throw new RequestError(410, 'This meeting has ended.');
+      let rolesChanged = false;
+      if (command.action === 'co-host') {
+        if (current.encrypted) throw new RequestError(403, 'Co-hosts are unavailable in encrypted meetings.');
+        if (command.enabled) {
+          admit(current, command.identity);
+          if (command.identity.startsWith('guest_')) throw new RequestError(403, 'Co-hosts must be signed in.');
+          const participant = await mainParticipant(current, command.identity);
+          if (participant?.sid !== command.sid || breakouts.assigned(current.id, command.identity)) {
+            throw new RequestError(409, 'That participant must be connected to the main meeting.');
+          }
+          grantCoHost.run(current.id, command.identity, command.sid);
+        } else if (findCoHost.get(current.id, command.identity)?.sid === command.sid) {
+          revokeCoHost.run(current.id, command.identity);
+        }
+        rolesChanged = true;
+      }
+      if (!host && ['mute', 'ask-unmute', 'stop-video', 'remove'].includes(command.action) &&
+          (command.identity === current.owner || command.identity === req.identity || await isActiveCoHost(current, command.identity))) {
+        throw new RequestError(403, 'Co-hosts can only moderate attendees.');
+      }
       if (command.action === 'lock') db.prepare('UPDATE meetings SET locked = ? WHERE id = ?').run(Number(command.locked), current.id);
       if (command.action === 'decide') {
         if (findGuest.get(current.id, command.identity)?.decision !== 'pending') throw new RequestError(409, 'This request has already been handled.');
@@ -473,24 +537,47 @@ export function createApp(options, dependencies = {}) {
         const guest = findGuest.get(current.id, command.identity);
         if (!guest || guest.decision === 'pending') throw new RequestError(404, 'Participant not found.');
         setDecision.run('denied', current.id, command.identity);
+        rolesChanged = !!revokeCoHost.run(current.id, command.identity).changes;
         const roomIds = [current.id, ...breakouts.assignedUncleaned(current.id, command.identity).map(room => room.id)];
         await media(client => Promise.all(roomIds.map(async name => {
           try { await client.removeParticipant(name, command.identity); }
           catch (error) { if (!isNotFound(error)) throw error; }
         })));
       }
-      if (command.action === 'mute') {
+      if (command.action === 'mute' || command.action === 'stop-video') {
         admit(current, command.identity);
         await media(async client => {
           const target = await client.getParticipant(current.id, command.identity);
-          for (const track of target.tracks.filter(track => track.source === 2 && !track.muted)) {
-            await client.mutePublishedTrack(current.id, command.identity, track.sid, true);
+          const source = command.action === 'mute' ? TrackSource.MICROPHONE : TrackSource.CAMERA;
+          await muteTracks(client, current, target, source);
+        });
+      }
+      if (command.action === 'ask-unmute') {
+        if (current.encrypted || breakouts.assigned(current.id, command.identity)) {
+          throw new RequestError(403, 'Microphone requests are available in the main room of standard meetings.');
+        }
+        admit(current, command.identity);
+        if (!(await mainParticipant(current, command.identity))) throw new RequestError(409, 'That attendee is no longer connected.');
+        await media(client => client.sendData(current.id, Uint8Array.of(1), DataPacket_Kind.RELIABLE, {
+          topic: microphoneRequestTopic, destinationIdentities: [command.identity],
+        }));
+      }
+      if (command.action === 'mute-all') {
+        const delegates = new Map(listCoHosts.all(current.id).map(({ identity, sid }) => [identity, sid]));
+        await media(async client => {
+          const attendees = (await client.listParticipants(current.id)).filter(person => person.identity !== current.owner &&
+            person.identity !== req.identity && delegates.get(person.identity) !== person.sid);
+          const results = await Promise.allSettled(attendees.map(person => muteTracks(client, current, person, TrackSource.MICROPHONE)));
+          if (results.some(result => result.status === 'rejected' && !isNotFound(result.reason))) {
+            throw new RequestError(502, 'Some microphones could not be muted. Try again.');
           }
         });
       }
       log.run(current.id, req.identity, command.action, command.identity ?? null, Date.now());
+      if (rolesChanged) await signalPlacement(current.id);
+      return listCoHosts.all(current.id);
     });
-    res.json({ ok: true });
+    res.json({ ok: true, coHosts });
   });
 
   const latestPoll = db.prepare('SELECT * FROM polls WHERE meeting = ? ORDER BY id DESC LIMIT 1');
