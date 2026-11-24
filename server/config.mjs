@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { googleCalendarSettings } from './google-calendar-oauth.mjs';
+import { outlookSettings } from './outlook-oauth.mjs';
 import { insforgeSettings } from './auth.mjs';
 
 export const root = fileURLToPath(new URL('../', import.meta.url));
@@ -58,6 +59,7 @@ export function readConfig(env = process.env, overrides = {}) {
     ...insforgeSettings(env.INSFORGE_URL, env.INSFORGE_ANON_KEY),
     cloudRecording: cloudRecordingSettings(env, originUrl, livekit),
     googleCalendar: googleCalendarSettings(env, originUrl),
+    outlook: outlookSettings(env, originUrl),
     livekitUrl: livekit?.origin, livekitKey: env.LIVEKIT_API_KEY, livekitSecret: env.LIVEKIT_API_SECRET,
     databasePath: env.DATABASE_PATH || resolve(root, 'data/meetrix.sqlite'),
     assets: resolve(root, 'dist'), ...overrides,

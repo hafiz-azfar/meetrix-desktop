@@ -5,6 +5,7 @@ const { pathToFileURL } = require('node:url');
 const { join } = require('node:path');
 const { startLocal } = require('./local.cjs');
 const { bindSpeech } = require('./speech.cjs');
+const { desktopControls } = require('./system-controls.cjs');
 
 let window;
 let settingsWindow;
@@ -15,6 +16,7 @@ let changing = false;
 const settingsFile = join(__dirname, 'connect.html');
 let configPath;
 let localConfigPath;
+let controls;
 
 function localOptions() {
   return {
@@ -130,6 +132,10 @@ async function open(origin) {
       devTools: !app.isPackaged, spellcheck: false },
   });
   guardNavigation(next.webContents, origin);
+  controls?.attach(next);
+  next.webContents.on('did-start-navigation', details => {
+    if (details.isMainFrame && !details.isSameDocument && window === next) controls?.clearReminders();
+  });
   next.on('closed', () => { if (window === next) window = null; });
   try {
     await next.loadURL(origin);
@@ -137,6 +143,7 @@ async function open(origin) {
     next.destroy();
     throw error;
   }
+  if (activeOrigin !== origin) controls?.reset();
   window = next;
   activeOrigin = origin;
   next.show();
@@ -213,7 +220,7 @@ function bindSettings() {
 
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
-  app.on('second-instance', () => { if (window) window.focus(); else settings(); });
+  app.on('second-instance', () => { if (!controls?.reveal()) settings(); });
   app.on('window-all-closed', () => { if (!changing) app.quit(); });
   app.on('before-quit', () => local?.stop());
   app.whenReady().then(async () => {
@@ -224,11 +231,10 @@ else {
       { label: 'Connect to a server…', click: settings }, { type: 'separator' }, { role: 'quit' },
     ] }, { label: 'Edit', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] }]));
     bindSettings();
-    const closeSpeech = bindSpeech({
-      ipcMain, utilityProcess, runtime: localOptions().runtime,
-      authorize: event => Boolean(window && !window.isDestroyed() && event.sender === window.webContents &&
-        event.senderFrame === event.sender.mainFrame && event.senderFrame && sameOrigin(event.senderFrame.url, activeOrigin)),
-    });
+    const authorize = event => Boolean(window && !window.isDestroyed() && event.sender === window.webContents &&
+      event.senderFrame === event.sender.mainFrame && event.senderFrame && sameOrigin(event.senderFrame.url, activeOrigin));
+    controls = desktopControls({ app, icon: join(__dirname, 'icon.ico'), currentWindow: () => window, ipcMain, authorize });
+    const closeSpeech = bindSpeech({ ipcMain, utilityProcess, runtime: localOptions().runtime, authorize });
     app.once('before-quit', closeSpeech);
     try {
       local = await startLocal({ ...localOptions(), instance: readLocalConfig() });

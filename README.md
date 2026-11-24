@@ -4,7 +4,7 @@ Meetrix is a Windows and web app for scheduled and instant video meetings. This 
 
 ## Run on Windows
 
-The InsForge trial installs alongside the earlier Meetrix app. At first launch, enter your InsForge project URL under **Local workspace**. Supply its public `ANON_KEY` when required by the project's configuration. The hosted workspace option accepts the HTTPS address of a Meetrix server running this branch.
+The InsForge trial installs alongside the earlier Meetrix app. For an unconfigured installer, enter your InsForge project URL under **Local workspace** on first launch. Supply its public `ANON_KEY` when required by the project's configuration. The hosted workspace option accepts the HTTPS address of a Meetrix server running this branch.
 
 Select **Continue in your browser** and choose an enabled provider such as Google or GitHub. Enter the code displayed in Meetrix to approve the desktop session. The app discovers provider buttons from your project's public InsForge settings. Its sign-in screen is built into Meetrix.
 
@@ -19,7 +19,7 @@ npm ci
 npm run dist
 ```
 
-The installer is written to `release/Meetrix-InsForge-Setup-0.1.16-x64.exe`. To preconfigure the installer with a project, copy `.env.example` to `.env`, fill the InsForge settings, and run `npm run dist:local`. If your project requires an anon key, use its public anon key. Installer and executable signing are left to the distributor. Builds fetch the pinned caption models once and cache them in `vendor/caption-models`.
+The installer is written to `release/Meetrix-InsForge-Setup-0.1.17-x64.exe`. To preconfigure the installer with a project, copy `.env.example` to `.env`, fill the InsForge settings, and run `npm run dist:local`. If your project requires an anon key, use its public anon key. Installer and executable signing are left to the distributor. Builds fetch the pinned caption models once and cache them in `vendor/caption-models`.
 
 ## Host a workspace
 
@@ -41,7 +41,15 @@ In a standard, signed-in-only meeting, the host can request cloud recording unde
 
 Enable the Google Calendar API and register a Google web OAuth client. Use the exact hosted HTTPS callback `/api/google-calendar/callback`. Set the three `MEETRIX_GOOGLE_CALENDAR_*` variables in `.env.example` on the server. The encryption key must be 32 random bytes encoded as base64url. Keep these values and callback query strings out of logs and client bundles. The workspace requests access to events on calendars the user owns. [Google OAuth setup](https://developers.google.com/identity/protocols/oauth2/web-server) · [Calendar scopes](https://developers.google.com/workspace/calendar/api/auth)
 
-Connect in a browser from **Meetings → Google Calendar**, then open an unopened meeting’s management menu. Publish and push selected meetings to the connected account’s primary calendar, or pull a changed title and time into Meetrix. Meetrix checks Google’s event version before writing. Linked events and provider edits are synchronized on request.
+Connect in a browser from **Meetings → Google Calendar**, then open an unopened meeting’s management menu. Publish and push selected meetings to the connected account’s primary calendar, or pull a changed title and time into Meetrix. Meetrix checks Google’s event version before writing.
+
+### Outlook Calendar and Mail for hosted workspaces
+
+Register a confidential web application in Microsoft Entra and register the exact hosted HTTPS redirect URI ending in `/api/outlook/callback`. Set `MEETRIX_OUTLOOK_CLIENT_ID`, `MEETRIX_OUTLOOK_CLIENT_SECRET`, and `MEETRIX_OUTLOOK_KEY` from `.env.example`. The key must be 32 random bytes encoded as base64url. Set `MEETRIX_OUTLOOK_TENANT` to your tenant ID for an organization-only installation. Keep the secret, encryption key, and callback query strings out of logs and desktop builds. [Microsoft OAuth and delegated permissions](https://learn.microsoft.com/en-us/graph/auth-v2-user?tabs=http)
+
+Connect Outlook Calendar in **Meetings**. Each linked event supports manual push and pull. After publishing or resolving a difference between the two copies, enable **Automatically sync this meeting** on either the Google Calendar or Outlook Calendar card. The server checks linked events about every three minutes. When both copies have changed, Meetrix pauses sync until the organizer chooses which copy to keep. Choose one automatic provider per meeting.
+
+Connect **Mail** separately to read recent Inbox and Sent messages and compose plain-text mail. Sending requires confirmation and reports when Outlook accepts the request. Use **Settings → Accounts** to disconnect Mail or Calendar independently. [Microsoft Graph send mail](https://learn.microsoft.com/en-us/graph/api/user-sendmail?view=graph-rest-1.0)
 
 ## Meeting features
 
@@ -51,6 +59,7 @@ Connect in a browser from **Meetings → Google Calendar**, then open an unopene
 - **Settings** includes a live microphone meter, a speaker test tone, noise reduction, camera preview and mirroring, and saved defaults for joining a call. Preview and diagnostic media stays on your device.
 - Use **Camera background** in Video settings, the pre-join setup, or a meeting’s **Devices** dialog. Choose blur or a JPEG, PNG, or WebP image from your device. The app saves your selection on this device. The bundled model applies the effect locally before Meetrix publishes your camera.
 - Use **Push-to-talk key** under **Keyboard shortcuts** to temporarily open a muted microphone with Space, Backtick, or F8 while the meeting window is focused.
+- On Windows, use the notification-area and reminder options in **Settings → Appearance**. While Meetrix is running, reminders appear within five minutes of a scheduled start and omit meeting details. Double-click the Meetrix icon in the notification area to restore the window.
 - Appearance, in-app shortcut assignments, chat accessibility, caption size and contrast, and presentation preferences are saved on your device. From a call, **View preferences** can pause incoming cameras while preserving audio and presentations. **Call statistics** displays sampled WebRTC media measurements and exports a local JSON snapshot of the displayed metrics.
 - Host moderation, passcodes, room locks, waiting rooms, and participant removal.
 - In standard meetings, hosts and co-hosts can move an attendee back to the waiting room from **People** or **Breakouts**. Readmitted attendees return to the main room with their camera and microphone off.
@@ -88,6 +97,8 @@ Run `node test/smoke-windows-share.mjs` with the unpacked Windows build to check
 Run `node test/smoke-windows-speech.mjs` against the unpacked app to check the offline recognizer with a pinned voice sample. Run `node test/smoke-cloud-recording-template.mjs` to verify approved media subscription and roster-change shutdown with bundled LiveKit. Testing storage authorization uses a fixture. Production verification requires a configured Egress worker and bucket.
 
 Run `node test/smoke-caption-translation.mjs` after building to check that both translation models work with external network requests disabled. Add `--desktop` to check the unpacked app.
+
+Run `node test/smoke-outlook.mjs` after building to check the browser flows with simulated Microsoft responses. Run `node test/smoke-windows-system.mjs` against the unpacked build for tray and reminder checks.
 
 ## License
 

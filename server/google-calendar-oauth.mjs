@@ -1,5 +1,6 @@
-import { createHash, randomBytes, createCipheriv, createDecipheriv } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { rateLimit } from 'express-rate-limit';
+import { credentialSeal } from './credential-seal.mjs';
 
 export const calendarScope = 'https://www.googleapis.com/auth/calendar.events.owned';
 const route = '/workspace/google-calendar';
@@ -22,10 +23,10 @@ export function googleCalendarSettings(env, origin) {
   return { clientId, clientSecret, key };
 }
 
-export function createGoogleOAuth({ db, origin, settings, limits, error, serial, call }) {
+export function createGoogleOAuth({ db, origin, settings, limits, error, serial, call, resetCalendar }) {
   const callback = '/google-calendar/callback';
   const redirect = new URL('/api' + callback, origin).href;
-  const key = Buffer.from(settings.key, 'base64url');
+  const { seal, unseal } = credentialSeal(settings.key);
   const start = db.prepare('INSERT INTO google_calendar_flows(state, nonce, owner, verifier, expires_at) VALUES (?, ?, ?, ?, ?)');
   const byState = db.prepare('SELECT * FROM google_calendar_flows WHERE state = ? AND expires_at > ?');
   const byOwner = db.prepare('SELECT * FROM google_calendar_flows WHERE nonce = ? AND owner = ? AND expires_at > ?');
@@ -42,19 +43,6 @@ export function createGoogleOAuth({ db, origin, settings, limits, error, serial,
     const values = (req.get('cookie') || '').split(';').map(value => value.trim()).filter(value => value.startsWith(prefix));
     const raw = values.length === 1 ? values[0].slice(prefix.length) : '';
     return pattern.test(raw) ? digest(raw) : null;
-  }
-  function seal(text, owner) {
-    const iv = randomBytes(12);
-    const cipher = createCipheriv('aes-256-gcm', key, iv);
-    cipher.setAAD(Buffer.from(owner));
-    return Buffer.concat([iv, cipher.update(text), cipher.final(), cipher.getAuthTag()]).toString('base64url');
-  }
-  function unseal(text, owner) {
-    const data = Buffer.from(text, 'base64url');
-    const cipher = createDecipheriv('aes-256-gcm', key, data.subarray(0, 12));
-    cipher.setAAD(Buffer.from(owner));
-    cipher.setAuthTag(data.subarray(-16));
-    return Buffer.concat([cipher.update(data.subarray(12, -16)), cipher.final()]).toString();
   }
   async function token(parameters) {
     const response = await call('https://oauth2.googleapis.com/token', {
@@ -120,7 +108,7 @@ export function createGoogleOAuth({ db, origin, settings, limits, error, serial,
           }
           const sealed = seal(result.refresh_token, owner);
           db.exec('BEGIN IMMEDIATE');
-          try { unlink.run(owner); save.run(owner, sealed); db.exec('COMMIT'); }
+          try { unlink.run(owner); resetCalendar(owner); save.run(owner, sealed); db.exec('COMMIT'); }
           catch (failure) { db.exec('ROLLBACK'); throw failure; }
         });
         res.json({ connected: true });
@@ -128,7 +116,7 @@ export function createGoogleOAuth({ db, origin, settings, limits, error, serial,
       api.delete(route, byIdentity(8), async (req, res) => {
         await serial('calendar:' + req.identity, () => {
           db.exec('BEGIN IMMEDIATE');
-          try { sweep.run(req.identity, Date.now()); unlink.run(req.identity); clear.run(req.identity); db.exec('COMMIT'); }
+          try { sweep.run(req.identity, Date.now()); unlink.run(req.identity); resetCalendar(req.identity); clear.run(req.identity); db.exec('COMMIT'); }
           catch (failure) { db.exec('ROLLBACK'); throw failure; }
         });
         res.json({ connected: false });

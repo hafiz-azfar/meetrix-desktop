@@ -65,6 +65,9 @@
 | F16-H2 | OAuth state and PKCE bind a Google account to the organizer, and a linked event can be pushed or pulled with conflict checking | Google Calendar API contract test with fixtures |
 | F23-H5 | Push-to-talk publishes a microphone only while held and releases on keyup and blur | Workspace browser smoke with fake media |
 | F30-H2 | Audio-only sharing transmits an audible track with no screen video, then releases the captured source | Four-client LiveKit and native Windows capture smoke tests |
+| F16-H3 | Organizer opts in to background synchronization. Only one-sided changes are applied and conflicts pause sync | Google and Outlook API fixtures and Outlook browser smoke test |
+| F19-H2 | Outlook Mail consent is separate from Calendar. Inbox and Sent show plain text. Compose requires confirmation | Outlook API fixtures and browser smoke test |
+| F34-H1 | Enabling the Windows tray hides the minimized app and reminders omit meeting details | Unpacked Windows smoke test |
 | F12-P1 | 100-person load, 30-hour duration, and production availability | Deployment-scale verification |
 
 Run `npm test` for the API suite. The RTC tests use two isolated browser pages and a real loopback LiveKit server. The desktop test is aimed at the Windows development build.

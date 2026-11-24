@@ -39,6 +39,12 @@ function AppearanceSettings({ prefs, updatePrefs }) {
           <option value="light">Light</option><option value="dark">Dark</option><option value="system">System</option>
         </select>
       </label>
+      {!!window.meetrixDesktop?.setDesktopPreferences && <>
+        <label className="check"><input type="checkbox" checked={prefs.minimizeToTray}
+          onChange={event => updatePrefs({ minimizeToTray: event.target.checked })} /> Minimize Meetrix to the notification area</label>
+        <label className="check"><input type="checkbox" checked={prefs.meetingReminders}
+          onChange={event => updatePrefs({ meetingReminders: event.target.checked })} /> Show a Windows reminder five minutes before meetings</label>
+      </>}
     </div>
   </>;
 }

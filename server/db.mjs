@@ -110,6 +110,36 @@ export function openDatabase(filename) {
       event TEXT NOT NULL,
       etag TEXT NOT NULL
     ) STRICT;
+    CREATE TABLE IF NOT EXISTS calendar_automation (
+      meeting TEXT PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL CHECK (provider IN ('google', 'outlook')),
+      baseline TEXT NOT NULL,
+      next_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('synced', 'unavailable', 'conflict'))
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS calendar_automation_due ON calendar_automation(provider, next_at);
+    CREATE TABLE IF NOT EXISTS outlook_flows (
+      state TEXT PRIMARY KEY,
+      nonce TEXT NOT NULL UNIQUE,
+      owner TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('calendar', 'mail')),
+      verifier TEXT NOT NULL,
+      expires_at INTEGER NOT NULL,
+      code TEXT
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS outlook_flows_expiry ON outlook_flows(expires_at);
+    CREATE TABLE IF NOT EXISTS outlook_connections (
+      owner TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('calendar', 'mail')),
+      refresh_token TEXT NOT NULL,
+      PRIMARY KEY (owner, kind)
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS outlook_events (
+      meeting TEXT PRIMARY KEY REFERENCES meetings(id),
+      event TEXT NOT NULL,
+      etag TEXT NOT NULL
+    ) STRICT;
     CREATE TABLE IF NOT EXISTS calendar_feeds (
       owner TEXT PRIMARY KEY,
       token_hash TEXT NOT NULL UNIQUE

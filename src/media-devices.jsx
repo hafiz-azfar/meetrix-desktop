@@ -13,6 +13,7 @@ const defaults = {
   chatSize: 'standard', announceMessages: true, reducedMotion: false,
   captionSize: 'standard', captionContrast: 'standard',
   shortcutsEnabled: true, shortcuts: defaultShortcuts, pushToTalk: '',
+  minimizeToTray: false, meetingReminders: false,
 };
 const fields = [
   { key: 'microphone', kind: 'audioinput', label: 'Microphone', Icon: Mic },

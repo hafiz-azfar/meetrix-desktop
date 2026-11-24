@@ -60,38 +60,62 @@ export function GoogleCalendarConnection({ api, close }) {
   </Dialog>;
 }
 
-export function GoogleMeetingSync({ api, meeting, onChanged }) {
+export function CalendarMeetingSync({ api, meeting, onChanged, provider = 'google-calendar' }) {
   const [state, setState] = useState(null);
   const [pending, setPending] = useState(false);
   const [text, setText] = useState('');
   const [error, setError] = useState('');
-  const endpoint = '/meetings/' + meeting.id + '/google-calendar';
+  const label = provider === 'outlook' ? 'Outlook Calendar' : 'Google Calendar';
+  const conflict = state?.automatic?.status === 'conflict';
+  const endpoint = '/meetings/' + meeting.id + '/' + provider;
   useEffect(() => {
     const cancel = new AbortController();
-    api(endpoint, { signal: cancel.signal }).then(setState).catch(failure => {
-      if (!cancel.signal.aborted) setError(failure.message);
-    });
-    return () => cancel.abort();
+    function load() {
+      api(endpoint, { signal: cancel.signal }).then(setState).catch(failure => {
+        if (!cancel.signal.aborted) setError(failure.message);
+      });
+    }
+    load();
+    const timer = setInterval(load, 30000);
+    return () => { cancel.abort(); clearInterval(timer); };
   }, [api, endpoint]);
   async function sync(direction) {
-    if (direction === 'pull' && !window.confirm('Apply the Google event’s title and time to this meeting?')) return;
+    if (direction === 'pull' && !window.confirm('Apply the ' + label + ' title and time to this meeting?')) return;
+    if (direction === 'keep-local' &&
+        !window.confirm('Replace the current ' + label + ' title and time with the Meetrix version?')) return;
     setPending(true);
     setText('');
     setError('');
     try {
       await api(endpoint, { method: 'POST', body: { direction } });
-      setState({ linked: true, connected: true });
-      setText(direction === 'pull' ? 'Meeting updated from Google Calendar.' : 'Google Calendar event saved.');
+      setState(await api(endpoint));
+      setText(direction === 'pull' ? 'Meeting updated from ' + label + '.' : label + ' event saved.');
       onChanged();
     } catch (failure) { setError(failure.message); }
     finally { setPending(false); }
   }
-  return <section className="form" aria-label="Google Calendar sync">
-    {state?.connected ? <div className="meeting-tool-actions">
-      <button className="button small" disabled={pending} onClick={() => sync('push')}>
-        {state.linked ? 'Push Meetrix changes' : 'Publish to Google Calendar'}</button>
-      {state.linked && <button className="button small" disabled={pending} onClick={() => sync('pull')}>Pull Google changes</button>}
-    </div> : state && <p className="muted">Connect Google Calendar from the Meetings page.</p>}
+  async function automatic(enabled) {
+    setPending(true);
+    setError('');
+    setText('');
+    try {
+      const result = await api(endpoint + '/automatic', { method: 'POST', body: { enabled } });
+      setState(previous => ({ ...previous, automatic: result.automatic }));
+    } catch (failure) { setError(failure.message); }
+    finally { setPending(false); }
+  }
+  return <section className="form" aria-label={label + ' sync'}>
+    {state && <strong>{label}</strong>}
+    {state?.connected ? <><div className="meeting-tool-actions">
+      <button className="button small" disabled={pending} onClick={() => sync(conflict ? 'keep-local' : 'push')}>
+        {conflict ? 'Keep Meetrix version' : state.linked ? 'Push Meetrix changes' : 'Publish to ' + label}</button>
+      {state.linked && <button className="button small" disabled={pending} onClick={() => sync('pull')}>Pull {provider === 'outlook' ? 'Outlook' : 'Google'} changes</button>}
+    </div>
+      {state.linked && <label className="check"><input type="checkbox" checked={!!state.automatic?.enabled}
+        disabled={pending} onChange={event => automatic(event.target.checked)} /> Automatically sync linked changes</label>}
+      {conflict && <p role="status" className="muted">Sync paused. Review the event and choose which version to keep.</p>}
+      {state.automatic?.status === 'unavailable' && <p role="status" className="muted">The provider is unavailable. Meetrix will retry.</p>}
+    </> : state && <p className="muted">Connect {label} from the Meetings page.</p>}
     {text && <p role="status">{text}</p>}
     {error && <p role="alert" className="error">{error}</p>}
   </section>;

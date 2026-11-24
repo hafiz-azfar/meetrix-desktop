@@ -130,6 +130,9 @@
   .clip-capture { margin-bottom: 1rem; }
   .clip-capture .meeting-tool-actions { margin-top: .75rem; }
   .booking-row { padding: 1rem; }
+  .mail-text { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+  .mail-row .meeting-info { min-width: 0; }
+  .mail-row .meeting-info span { overflow-wrap: anywhere; }
   .booking-row + .booking-row { border-top: 1px solid var(--line); }
   .booking-row h2 { margin: 0; font-size: 1rem; }
   .booking-row details, .summary-panel { margin-top: 1rem; }
@@ -157,7 +160,7 @@
   .meeting-actions { display: flex; flex-wrap: wrap; gap: 8px; }
   .segment { border: 1px solid var(--line); background: var(--panel-raised); padding: 3px; display: flex; border-radius: 8px; }
   .segment button { background: transparent; border: 0; border-radius: 6px; padding: 6px 9px; color: var(--muted); font-size: .78rem; }
-  .segment button.active { background: var(--accent-soft); color: var(--accent); }
+  .segment button:is(.active, [aria-pressed="true"]) { background: var(--accent-soft); color: var(--accent); }
   .notice { display: flex; align-items: center; justify-content: space-between; gap: 8px; background: var(--accent-soft); border: 1px solid var(--accent-border); border-radius: var(--radius); padding: 4px 8px 4px 13px; margin-bottom: 14px; font-size: .86rem; }
   .preview { display: grid; place-items: center; position: relative; overflow: hidden; height: 182px; border-radius: var(--radius); background: var(--stage); }
   .preview video { width: 100%; height: 100%; min-height: 0; object-fit: contain; }

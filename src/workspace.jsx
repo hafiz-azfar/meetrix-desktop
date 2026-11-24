@@ -1,7 +1,7 @@
 import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import {
   ArrowDownToLine, ArrowRight, CalendarDays, ChevronRight,
-  CalendarClock, CheckSquare, Clipboard, Clock3, DoorOpen, Ellipsis, FileText, Film, House, LockKeyhole, MessageSquare, Mic, Plus, Settings,
+  CalendarClock, CheckSquare, Clipboard, Clock3, DoorOpen, Ellipsis, FileText, Film, House, LockKeyhole, Mail, MessageSquare, Mic, Plus, Settings,
   Video, X,
 } from 'lucide-react';
 import { apiFor, calendarInvite, calendarSeries, invitation, parseInvitation } from './api.js';
@@ -9,7 +9,8 @@ import { maxOccurrences, maxRepeatInterval, meetingOccurrences } from './meeting
 import { generateRoomKey, validRoomKey } from './encryption.js';
 import { Logo, Dialog } from './ui.jsx';
 import { TeamChat } from './team-chat.jsx';
-import { GoogleCalendarConnection, GoogleMeetingSync } from './google-calendar.jsx';
+import { CalendarMeetingSync, GoogleCalendarConnection } from './google-calendar.jsx';
+import { OutlookConnection, OutlookMail } from './outlook.jsx';
 import { CalendarSubscription } from './calendar-subscription.jsx';
 import { Clips } from './clips.jsx';
 import { BookingWorkspace } from './booking-workspace.jsx';
@@ -24,6 +25,7 @@ const Conference = lazy(() => import('./conference.jsx').then(module => ({ defau
 const panels = [
   { id: 'home', title: 'Home', icon: House },
   { id: 'meetings', title: 'Meetings', icon: CalendarDays },
+  { id: 'mail', title: 'Mail', icon: Mail },
   { id: 'team-chat', title: 'Team chat', icon: MessageSquare },
   { id: 'bookings', title: 'Bookings', icon: CalendarClock },
   { id: 'tasks', title: 'Tasks', icon: CheckSquare },
@@ -232,12 +234,17 @@ export function GuestMeeting({ code, onBack, prefs, updatePrefs }) {
 export function Workspace({ config, user, accountControl, prefs, updatePrefs }) {
   const name = (user?.fullName || user?.username || user?.firstName || 'Participant').slice(0, 60);
   const api = useMemo(apiFor, []);
-  const [page, setPage] = useState('home');
+  const query = new URLSearchParams(location.search);
+  const outlookCallback = config.outlook && query.has('outlook');
+  const [page, setPage] = useState(() => outlookCallback ? query.get('outlookApp') === 'mail' ? 'mail' : 'meetings' : 'home');
   const [filter, setFilter] = useState('upcoming');
   const [meetings, setMeetings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [notice, updateNotice] = useState(null);
-  const [modal, setModal] = useState(() => config.googleCalendar && new URLSearchParams(location.search).has('googleCalendar') ? 'google-calendar' : inviteCode ? 'join' : '');
+  const [modal, setModal] = useState(() => outlookCallback
+    ? query.get('outlookApp') === 'mail' ? 'outlook-mail' : 'outlook-calendar'
+    : config.googleCalendar && query.has('googleCalendar') ? 'google-calendar' : inviteCode ? 'join' : '');
+  const [mailRevision, setMailRevision] = useState(0);
   const [target, setTarget] = useState(null);
   const [editing, setEditing] = useState(null);
   const [archived, setArchived] = useState(null);
@@ -248,6 +255,28 @@ export function Workspace({ config, user, accountControl, prefs, updatePrefs }) 
     api('/meetings').then(setMeetings).catch(error => setNotice(error.message)).finally(() => setLoading(false));
   }
   useEffect(() => { if (page === 'home' || page === 'meetings') refresh(); }, [api, page]);
+  useEffect(() => {
+    if (!(prefs.meetingReminders && window.meetrixDesktop) && (page !== 'meetings' || (!config.googleCalendar && !config.outlook))) return;
+    const cancel = new AbortController();
+    const timer = setInterval(() => api('/meetings', { signal: cancel.signal }).then(setMeetings).catch(() => {}), 30000);
+    return () => { clearInterval(timer); cancel.abort(); };
+  }, [api, page, config.googleCalendar, config.outlook, prefs.meetingReminders]);
+  useEffect(() => {
+    const shell = window.meetrixDesktop;
+    if (!shell?.setDesktopPreferences) return;
+    let live = true;
+    const remind = prefs.meetingReminders === true;
+    shell.setDesktopPreferences({ tray: prefs.minimizeToTray === true, reminders: remind }).then(() => {
+      if (!live || !remind) return;
+      const cutoff = Date.now() - 60_000;
+      return shell.setMeetingReminders(meetings.filter(item => !item.openedAt && !item.stoppedAt && item.startAt >= cutoff)
+        .sort((a, b) => a.startAt - b.startAt).slice(0, 100).map(({ id, startAt }) => ({ id, startAt })));
+    }).catch(() => {});
+    return () => { live = false; };
+  }, [meetings, prefs.meetingReminders, prefs.minimizeToTray]);
+  useEffect(() => () => {
+    window.meetrixDesktop?.setMeetingReminders?.([]).catch(() => {});
+  }, []);
   function enter(meeting) { setModal(''); setTarget(meeting); }
   function created(meeting, scheduled) {
     setModal('');
@@ -278,7 +307,7 @@ export function Workspace({ config, user, accountControl, prefs, updatePrefs }) 
     <aside className="sidebar">
       <Logo />
       <nav aria-label="Workspace">
-        {panels.map(({ id, title, icon: Icon }) => <button key={id} aria-current={page === id ? 'page' : undefined} className="nav-button"
+        {panels.filter(item => item.id !== 'mail' || config.outlook).map(({ id, title, icon: Icon }) => <button key={id} aria-current={page === id ? 'page' : undefined} className="nav-button"
           aria-label={title} title={title} onClick={() => { setPage(id); setNotice(''); }}><Icon size={19} /><span>{title}</span></button>)}
       </nav>
       <div className="sidebar-foot" title={config.desktop ? 'Meeting links work on this PC' : undefined}>
@@ -316,12 +345,14 @@ export function Workspace({ config, user, accountControl, prefs, updatePrefs }) 
         {page === 'meetings' && <div className="page-head"><h1>Meetings</h1><div className="meeting-actions">
           <button className="button" onClick={() => setModal('calendar-subscription')}>Calendar subscription</button>
           {config.googleCalendar && <button className="button" onClick={() => setModal('google-calendar')}>Google Calendar</button>}
+          {config.outlook && <button className="button" onClick={() => setModal('outlook-calendar')}>Outlook Calendar</button>}
           {config.cloudRecording && <button className="button" onClick={() => setModal('cloud-recordings')}>
             <ArrowDownToLine size={16} /> Cloud recordings</button>}
           <button className="button" onClick={() => setModal('join')}><DoorOpen size={17} /> Join</button>
           <button className="button primary" onClick={() => setModal('schedule')}><Plus size={18} /> Schedule</button>
         </div></div>}
         {page === 'team-chat' && <TeamChat api={api} name={name} />}
+        {page === 'mail' && config.outlook && <OutlookMail api={api} key={mailRevision} connect={() => setModal('outlook-mail')} />}
         {page === 'clips' && <Clips key={user.id} owner={user.id} />}
         {page === 'bookings' && <BookingWorkspace api={api} name={name} local={config.desktop} onChanged={refresh} />}
         {['tasks', 'canvases'].includes(page) && <PersonalWorkspace key={page} api={api} kind={page} />}
@@ -344,11 +375,17 @@ export function Workspace({ config, user, accountControl, prefs, updatePrefs }) 
     </main>
     {['start', 'schedule'].includes(modal) && <MeetingForm mode={modal} api={api} name={name} close={() => setModal('')} onCreated={created} />}
     {editing && modal !== 'edit' && <Dialog title={editing.title} close={() => setEditing(null)}>
-      {config.googleCalendar && <GoogleMeetingSync api={api} meeting={editing} onChanged={refresh} />}
+      {config.googleCalendar && <CalendarMeetingSync api={api} meeting={editing} onChanged={refresh} />}
+      {config.outlook && <CalendarMeetingSync api={api} meeting={editing} provider="outlook" onChanged={refresh} />}
       <div className="dialog-actions"><button className="button danger" onClick={() => cancel(editing)}>Cancel meeting</button><button className="button primary" onClick={() => setModal('edit')}>Reschedule</button></div></Dialog>}
     {editing && modal === 'edit' && <MeetingForm mode="edit" meeting={editing} api={api} name={name} close={() => { setModal(''); setEditing(null); }} onCreated={meeting => { setEditing(null); created(meeting, true); }} />}
     {archived && <Dialog title={archived.title + ' · Notes'} close={() => setArchived(null)}><Notes api={api} id={archived.id} readOnly /></Dialog>}
     {modal === 'google-calendar' && <GoogleCalendarConnection api={api} close={() => setModal('')} />}
+    {['outlook-calendar', 'outlook-mail'].includes(modal) && <OutlookConnection api={api}
+      capability={modal === 'outlook-mail' ? 'mail' : 'calendar'} close={() => {
+        if (modal === 'outlook-mail') setMailRevision(previous => previous + 1);
+        setModal('');
+      }} />}
     {modal === 'calendar-subscription' && <CalendarSubscription api={api} close={() => setModal('')} />}
     {modal === 'cloud-recordings' && <CloudRecordingLibrary api={api} close={() => setModal('')} />}
     {modal.startsWith('join') && <JoinForm code={modal === 'join' ? inviteCode || '' : modal.slice(5)} close={() => setModal('')} onJoin={enter} />}

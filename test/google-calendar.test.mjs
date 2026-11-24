@@ -18,7 +18,7 @@ test('Google Calendar checks OAuth state, encrypts refresh credentials, and sync
   let challenge;
   let number = 0;
   let exchanges = 0;
-  const { app, close } = createApp({
+  const { app, close, syncCalendars } = createApp({
     origin, insforgeUrl: 'https://auth.meetrix.test', databasePath: ':memory:', googleCalendar: options,
   }, {
     db, authenticate: async value => value,
@@ -112,6 +112,26 @@ test('Google Calendar checks OAuth state, encrypts refresh credentials, and sync
   assert.equal(updated.startAt, moved.getTime());
   assert.equal((await api(sync, 'POST', { direction: 'push' })).status, 200);
   assert.equal(events.size, 1);
+  assert.equal((await api(sync + '/automatic', 'POST', { enabled: true })).data.automatic.enabled, true);
+  const latest = events.get(event.id);
+  latest.summary = 'Auto-imported Google title';
+  latest.etag = '"automatic"';
+  db.prepare('UPDATE calendar_automation SET next_at = 0 WHERE meeting = ?').run(meeting.id);
+  await syncCalendars();
+  assert.equal((await api('/meetings')).data[0].title, 'Auto-imported Google title');
+  assert.equal((await api(sync)).data.automatic.status, 'synced');
+  latest.summary = 'Conflicting Google title';
+  latest.etag = '"conflict"';
+  assert.equal((await api('/meetings/' + meeting.id, 'PATCH', {
+    title: 'Keep Meetrix title', startAt: moved.toISOString(), duration: 60,
+  })).status, 200);
+  db.prepare('UPDATE calendar_automation SET next_at = 0 WHERE meeting = ?').run(meeting.id);
+  await syncCalendars();
+  assert.equal((await api(sync)).data.automatic.status, 'conflict');
+  assert.equal((await api(sync, 'POST', { direction: 'keep-local' })).status, 200);
+  assert.equal(events.get(event.id).summary, 'Keep Meetrix title');
+  assert.equal((await api(sync)).data.automatic.status, 'synced');
   assert.equal((await api(account, 'DELETE', {})).data.connected, false);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM calendar_automation').get().n, 0);
   assert.equal((await api(sync, 'POST', { direction: 'push' })).status, 409);
 });

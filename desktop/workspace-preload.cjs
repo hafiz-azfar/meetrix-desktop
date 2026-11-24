@@ -2,6 +2,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('meetrixDesktop', Object.freeze({
   openSignIn: request => ipcRenderer.invoke('meetrix:browser-sign-in', request),
+  setDesktopPreferences: preferences => ipcRenderer.invoke('meetrix:desktop-preferences', preferences),
+  setMeetingReminders: reminders => ipcRenderer.invoke('meetrix:meeting-reminders', reminders),
   speech: Object.freeze({
     available: () => ipcRenderer.invoke('meetrix:speech-available'),
     start: () => ipcRenderer.invoke('meetrix:speech-start'),
