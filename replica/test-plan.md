@@ -78,6 +78,9 @@
 | F32-H3 | Undo and redo change the displayed annotations on presenter and attendee clients. Attendees cannot edit the history | Multi-client LiveKit smoke test |
 | F40-H1 | A connected moderator’s voice reaches only the selected breakout room. Revoking a co-host or closing the rooms stops forwarding | API and multi-client LiveKit smoke tests |
 | F41-H1 | A breakout attendee can contact the host about their room and a moderator can resolve the request | API and multi-client LiveKit smoke tests |
+| F42-H1 | Hosts and co-hosts can visit rooms and return with media muted. Room help reaches the host during a visit. A co-host keeps their role after rooms close | API and four-client LiveKit smoke tests |
+| F42-N1 | A visitor needs the routing key and matching account. A stale LiveKit SID cannot inherit the co-host role. The host can revoke a visiting co-host | API tests |
+| F43-H1 | A moderator can move attendees between open breakout rooms and the main meeting while the call continues | API and four-client LiveKit smoke tests |
 | F12-P1 | 100-person load, 30-hour duration, and production availability | Deployment-scale verification |
 
 Run `npm test` for the API suite. The RTC tests use two isolated browser pages and a real loopback LiveKit server. The desktop test is aimed at the Windows development build.

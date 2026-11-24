@@ -23,11 +23,12 @@ export function useRoomPlacement(api, initial) {
     });
   }, []);
   const { routingKey, roomId, meeting, placementEpoch = 0 } = session;
-  const chooseBreakout = useCallback(async destination => {
-    if (!routingKey || ended || waiting) throw new Error('Attendee room selection is unavailable.');
+  const chooseBreakout = useCallback(async (destination, moderator = false) => {
+    if (!routingKey || ended || waiting) throw new Error('Room changes are unavailable.');
+    const location = { key: routingKey, roomId, placementEpoch };
     try {
-      await api('/meetings/' + meeting.id + '/placement', {
-        method: 'POST', body: { key: routingKey, roomId, placementEpoch, breakoutRoomId: destination || null },
+      await api('/meetings/' + meeting.id + (moderator ? '/moderator-location' : '/placement'), {
+        method: 'POST', body: moderator ? { ...location, destination } : { ...location, breakoutRoomId: destination },
       });
     } finally { refreshPlacement(); }
   }, [api, ended, meeting.id, placementEpoch, refreshPlacement, roomId, routingKey, waiting]);

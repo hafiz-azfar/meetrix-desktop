@@ -4,9 +4,10 @@ const keyDigest = value => createHash('sha256').update(value).digest('hex');
 
 export function breakoutStore(db) {
   const active = db.prepare('SELECT id, name FROM breakout_rooms WHERE meeting = ? AND closed_at IS NULL ORDER BY position');
+  const activeRoom = db.prepare('SELECT id FROM breakout_rooms WHERE meeting = ? AND id = ? AND closed_at IS NULL');
   const members = db.prepare('SELECT identity FROM breakout_members WHERE room = ? ORDER BY identity');
   const assigned = db.prepare(`
-    SELECT breakout_rooms.id, breakout_rooms.name FROM breakout_rooms
+    SELECT breakout_rooms.id, breakout_rooms.name, breakout_members.moderator_visit AS moderatorVisit FROM breakout_rooms
     JOIN breakout_members ON breakout_members.room = breakout_rooms.id
     WHERE breakout_rooms.meeting = ? AND breakout_rooms.closed_at IS NULL AND breakout_members.identity = ?
   `);
@@ -16,7 +17,7 @@ export function breakoutStore(db) {
     WHERE breakout_rooms.meeting = ? AND breakout_rooms.cleaned_at IS NULL AND breakout_members.identity = ?
   `);
   const insertRoom = db.prepare('INSERT INTO breakout_rooms(id, meeting, name, position) VALUES(?, ?, ?, ?)');
-  const insertMember = db.prepare('INSERT INTO breakout_members(room, identity) VALUES(?, ?)');
+  const insertMember = db.prepare('INSERT INTO breakout_members(room, identity, moderator_visit) VALUES(?, ?, ?)');
   const removeMember = db.prepare('DELETE FROM breakout_members WHERE identity = ? AND room IN (SELECT id FROM breakout_rooms WHERE meeting = ?)');
   const removeActiveMember = db.prepare(`DELETE FROM breakout_members WHERE identity = ?
     AND room IN (SELECT id FROM breakout_rooms WHERE meeting = ? AND closed_at IS NULL)`);
@@ -73,6 +74,7 @@ export function breakoutStore(db) {
     assignedUncleaned(meeting, identity) { return assignedUncleaned.all(meeting, identity); },
     removeMember(meeting, identity) { removeMember.run(identity, meeting); },
     choices(meeting) { return selectionEnabled.get(meeting) ? active.all(meeting) : []; },
+    hasRoom(meeting, room) { return Boolean(activeRoom.get(meeting, room)); },
     closesAt(meeting) { return readDeadline.get(meeting)?.closesAt ?? null; },
     scheduleClose(meeting, closesAt) { saveDeadline.run(meeting, closesAt); },
     due(now) { return dueDeadlines.all(now); },
@@ -86,7 +88,7 @@ export function breakoutStore(db) {
         for (const [position, room] of plan.entries()) {
           const id = 'breakout_' + randomBytes(12).toString('base64url');
           insertRoom.run(id, meeting, room.name, position);
-          for (const identity of room.members) insertMember.run(id, identity);
+          for (const identity of room.members) insertMember.run(id, identity, 0);
           for (const entry of scheduled.filter(item => item.room === position)) {
             saveScheduled.run(meeting, id, entry.key, Number(entry.claimed));
           }
@@ -98,13 +100,13 @@ export function breakoutStore(db) {
       if (!scheduled) return;
       transaction(() => {
         claimScheduled.run(meeting, emailKey);
-        if (!assigned.get(meeting, identity)) insertMember.run(scheduled.room, identity);
+        if (!assigned.get(meeting, identity)) insertMember.run(scheduled.room, identity, 0);
       });
     },
-    select(meeting, identity, room) {
+    select(meeting, identity, room, moderatorVisit = false) {
       transaction(() => {
         removeActiveMember.run(identity, meeting);
-        if (room) insertMember.run(room, identity);
+        if (room) insertMember.run(room, identity, Number(moderatorVisit));
       });
     },
     close(meeting) {

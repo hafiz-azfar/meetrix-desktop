@@ -535,6 +535,17 @@ try {
   await resolveHelp.waitFor();
   await resolveHelp.click();
   await resolveHelp.waitFor({ state: 'detached' });
+  async function moveTestGuest(destination) {
+    await host.getByText('Move Test guest to another room', { exact: true }).click();
+    await host.getByLabel('Destination for Test guest').selectOption({ label: destination });
+    await host.getByRole('button', { name: 'Move attendee', exact: true }).click();
+  }
+  await moveTestGuest('Workshop');
+  await guest.getByText('Breakout · Workshop', { exact: true }).waitFor();
+  await moveTestGuest('Main meeting');
+  await guest.getByText('Returned to the main meeting. Your microphone and camera are off.', { exact: true }).waitFor();
+  await moveTestGuest('Design');
+  await guest.getByText('Breakout · Design', { exact: true }).waitFor();
 
   for (const page of [guest, ...otherGuests]) await page.evaluate(() => {
     const start = AudioBufferSourceNode.prototype.start;
@@ -580,6 +591,20 @@ try {
   await host.waitForFunction(() => window.testAnnouncementTrack.readyState === 'ended');
   await host.evaluate(() => window.testAnnouncementContext.close());
   await guest.getByText('Moderator voice announcement', { exact: true }).waitFor({ state: 'detached' });
+  await host.getByRole('button', { name: 'Visit Design', exact: true }).click();
+  await host.getByText('Breakout · Design', { exact: true }).waitFor();
+  await host.getByRole('button', { name: 'Unmute', exact: true }).waitFor({ state: 'visible' });
+  assert.equal(await host.getByRole('button', { name: 'Camera', exact: true }).getAttribute('aria-pressed'), 'false');
+  await guest.getByRole('button', { name: 'People 3', exact: true }).waitFor();
+  await otherGuests[1].getByRole('button', { name: 'Ask for help', exact: true }).click();
+  await host.getByText('A breakout room asked for help. Open Breakouts to see the request.', { exact: true }).waitFor();
+  await host.getByRole('button', { name: 'Breakouts', exact: true }).click();
+  await host.getByRole('button', { name: 'Resolve help request for Workshop', exact: true }).click();
+  await host.getByRole('button', { name: 'Visit Workshop', exact: true }).click();
+  await host.getByText('Breakout · Workshop', { exact: true }).waitFor();
+  await host.getByRole('button', { name: 'Return to main meeting', exact: true }).click();
+  await host.getByText('Returned to the main meeting. Your microphone and camera are off.', { exact: true }).waitFor();
+  await host.getByRole('button', { name: 'Breakouts', exact: true }).click();
   await host.getByLabel('Return countdown').selectOption('15');
   await host.getByRole('button', { name: 'Start return countdown' }).click();
   await host.getByRole('timer').filter({ hasText: 'Rooms close in' }).waitFor();
@@ -590,6 +615,8 @@ try {
   }
   await host.getByRole('button', { name: 'People 4', exact: true }).waitFor();
 
+  await host.getByLabel('Name for breakout room 1').fill('Design');
+  await host.getByLabel('Name for breakout room 2').fill('Workshop');
   await host.getByLabel('Let attendees choose their room').check();
   for (const name of ['Test guest', 'Design partner', 'Workshop guest']) {
     await host.getByLabel('Assign ' + name).selectOption('');
@@ -639,8 +666,16 @@ try {
   await delegate.getByLabel('Assign Test guest').selectOption('0');
   await delegate.getByRole('button', { name: 'Open breakout rooms' }).click();
   await guest.getByText('Breakout · Peer review', { exact: true }).waitFor();
+  await delegate.getByRole('button', { name: 'Visit Peer review', exact: true }).click();
+  await delegate.getByText('Breakout · Peer review', { exact: true }).waitFor();
+  await roleStatus.waitFor();
+  assert.equal(await delegate.getByRole('button', { name: 'Camera', exact: true }).getAttribute('aria-pressed'), 'false');
+  await delegate.getByRole('button', { name: 'Breakouts', exact: true }).click();
+  await delegate.locator('.call-side').screenshot({ path: resolve(results, 'meetrix-breakout-visit.png') });
   await delegate.getByRole('button', { name: 'Close all rooms' }).click();
   await guest.getByText('Returned to the main meeting. Your microphone and camera are off.', { exact: true }).waitFor();
+  await delegate.getByText('Returned to the main meeting. Your microphone and camera are off.', { exact: true }).waitFor();
+  await roleStatus.waitFor();
   await guest.getByRole('button', { name: 'Unmute', exact: true }).click();
   await guest.getByRole('button', { name: 'Mute', exact: true }).waitFor();
   await guest.getByRole('button', { name: 'Camera', exact: true }).click();

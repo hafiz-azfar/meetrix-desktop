@@ -190,9 +190,9 @@ function Call({ session, api, prefs, updatePrefs, onLeave, recap, connectionErro
   const delegates = new Map(coHosts.map(({ identity, sid }) => [identity, sid]));
   const isCoHost = participant => !!participant.sid && delegates.get(participant.identity) === participant.sid;
   const roleOf = participant => participant.identity === hostIdentity ? 'Host' : isCoHost(participant) ? 'Co-host' : '';
-  const coHost = online && !host && meetingTools && !session.accountless && isCoHost(localParticipant);
+  const coHost = online && !host && !session.meeting.encrypted && !session.accountless && isCoHost(localParticipant);
   const canModerate = host || coHost;
-  const canManageBreakouts = meetingTools && canModerate;
+  const canManageBreakouts = !session.meeting.encrypted && canModerate;
   const canOpenBreakouts = canManageBreakouts || breakoutChoices.length > 0;
   const pushToTalk = usePushToTalk(room, {
     key: prefs.pushToTalk, online, deviceId: prefs.microphoneId, reduceNoise: prefs.reduceNoise, onError: setError,
@@ -203,11 +203,17 @@ function Call({ session, api, prefs, updatePrefs, onLeave, recap, connectionErro
   const recording = useMeetingRecording(room, { enabled: meetingTools, hostIdentity, host, meetingId: id });
   const cloudRecordingEnabled = meetingTools && session.cloudRecording === true;
   const cloudRecording = useCloudRecording({ enabled: cloudRecordingEnabled, meetingId: id, online, api });
+  const [visiting, setVisiting] = useState(false);
 
   async function run(operation) {
     setError('');
     try { await operation(); return true; }
     catch (failure) { setError(failure.message || 'That action could not be completed.'); return false; }
+  }
+  async function visitBreakout(destination) {
+    setVisiting(true);
+    try { await run(() => chooseBreakout(destination, true)); }
+    finally { setVisiting(false); }
   }
   async function askForHelp() {
     if (!online || requestingHelp) return;
@@ -306,7 +312,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, recap, connectionErro
         if (text && text.length <= 300) setToast('Host announcement · ' + text);
         return;
       }
-      if (serverPacket && topic === breakoutHelpTopic && canModerate && meetingTools && payload.byteLength === 1 && payload[0] === 1) {
+      if (serverPacket && topic === breakoutHelpTopic && canModerate && payload.byteLength === 1 && payload[0] === 1) {
         setToast('A breakout room asked for help. Open Breakouts to see the request.');
         return;
       }
@@ -331,10 +337,12 @@ function Call({ session, api, prefs, updatePrefs, onLeave, recap, connectionErro
     }
     room.on(RoomEvent.DataReceived, receive);
     room.on(RoomEvent.ParticipantDisconnected, remove);
+    room.on(RoomEvent.Connected, refreshPlacement);
     room.on(RoomEvent.Disconnected, refreshPlacement);
     return () => {
       room.off(RoomEvent.DataReceived, receive);
       room.off(RoomEvent.ParticipantDisconnected, remove);
+      room.off(RoomEvent.Connected, refreshPlacement);
       room.off(RoomEvent.Disconnected, refreshPlacement);
     };
   }, [room, refreshPlacement, session.breakoutName, meetingTools, canModerate, updateRoles]);
@@ -595,7 +603,9 @@ function Call({ session, api, prefs, updatePrefs, onLeave, recap, connectionErro
       {online && host && hostVersion > 0 && <span className="breakout-indicator" role="status">You’re the host</span>}</div>
       <div className="call-header-actions">
         {session.meeting.encrypted && <span className="button subtle"><ShieldCheck size={16} /> Encrypted media</span>}
-        {session.breakoutName && session.routingKey && <button className="button" disabled={!online || requestingHelp}
+        {session.moderatorVisit && <button className="button" disabled={!online || visiting}
+          onClick={() => visitBreakout(null)}>Return to main meeting</button>}
+        {session.breakoutName && session.routingKey && !canModerate && !session.moderatorVisit && <button className="button" disabled={!online || requestingHelp}
           onClick={askForHelp}>Ask for help</button>}
         <button className="button" disabled={!online} onClick={() => setSettings(true)}><Settings2 size={16} /> Devices</button>
         <button className="button" onClick={() => run(async () => { await navigator.clipboard.writeText(invitation(id)); setToast('Invite copied.'); })}><Clipboard size={16} /> Invite</button>
@@ -670,7 +680,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, recap, connectionErro
                 : <button className="icon-button" title="Ask to unmute" aria-label={'Ask ' + participant.name + ' to unmute'} onClick={() => moderate({ action: 'ask-unmute', identity: participant.identity })}><Mic size={17} /></button>}
               {participant.isCameraEnabled && <button className="icon-button" title="Stop camera" aria-label={'Stop camera for ' + participant.name}
                 onClick={() => moderate({ action: 'stop-video', identity: participant.identity })}><VideoOff size={17} /></button>}
-              {meetingTools && <button className="icon-button" title="Move to waiting room"
+              {!session.meeting.encrypted && <button className="icon-button" title="Move to waiting room"
                 aria-label={'Move ' + (participant.name || 'Guest') + ' to waiting room'}
                 onClick={() => moveToWaitingRoom(participant)}><Hourglass size={17} /></button>}
               <button className="icon-button" title="Remove participant" aria-label={'Remove ' + participant.name} onClick={() => {
@@ -696,6 +706,8 @@ function Call({ session, api, prefs, updatePrefs, onLeave, recap, connectionErro
           {cloudRecordingEnabled && <CloudRecordingPanel recording={cloudRecording} online={online} />}
         </>}
         {panel === 'breakouts' && canManageBreakouts && <BreakoutRooms api={api} meetingId={id} online={online} prefs={prefs}
+          roomId={session.roomId} visiting={visiting} onVisit={visitBreakout}
+          revokeVisitor={host ? visitor => moderate({ action: 'co-host', identity: visitor.identity, sid: visitor.sid, enabled: false }) : null}
           participants={participants.filter(participant => !roleOf(participant))}
           moveToWaitingRoom={moveToWaitingRoom}
           removeParticipant={identity => moderate({ action: 'remove', identity })} />}

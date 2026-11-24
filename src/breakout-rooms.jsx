@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Hourglass, Plus, Send, Shuffle, UserMinus, X } from 'lucide-react';
+import { Hourglass, Plus, Send, ShieldMinus, Shuffle, UserMinus, X } from 'lucide-react';
 import { BreakoutVoiceSender } from './breakout-voice.jsx';
 
 export function BreakoutCountdown({ closesAt, label = 'Returning in' }) {
@@ -18,7 +18,28 @@ function BreakoutClock({ closesAt, label }) {
   return <span className="breakout-indicator" role="timer">{label} {minutes}:{String(remaining % 60).padStart(2, '0')}</span>;
 }
 
-export function BreakoutRooms({ api, meetingId, participants, moveToWaitingRoom, removeParticipant, online, prefs }) {
+function MoveAttendee({ guest, from, meetingId, rooms, disabled, submit }) {
+  const [destination, setDestination] = useState('');
+  return <details>
+    <summary className="muted">Move {guest.name} to another room</summary>
+    <form className="form" onSubmit={event => {
+      event.preventDefault();
+      submit({ action: 'move-attendee', identity: guest.identity, from, destination: destination === meetingId ? null : destination });
+    }}>
+      <label>Destination for {guest.name}
+        <select required disabled={disabled} value={destination} onChange={event => setDestination(event.target.value)}>
+          <option value="" disabled>Choose a room</option>
+          {from !== meetingId && <option value={meetingId}>Main meeting</option>}
+          {rooms.filter(room => room.id !== from).map(room => <option key={room.id} value={room.id}>{room.name}</option>)}
+        </select>
+      </label>
+      <button className="button small" disabled={disabled || !destination}>Move attendee</button>
+    </form>
+  </details>;
+}
+
+export function BreakoutRooms({ api, meetingId, participants, moveToWaitingRoom, removeParticipant, online, prefs,
+  roomId, visiting, onVisit, revokeVisitor }) {
   const [active, setActive] = useState(null);
   const [openSelection, setOpenSelection] = useState(false);
   const [selfSelect, setSelfSelect] = useState(false);
@@ -92,6 +113,7 @@ export function BreakoutRooms({ api, meetingId, participants, moveToWaitingRoom,
       if (await action(guest)) {
         setActive(previous => previous.map(room => ({
           ...room, members: room.members.filter(member => member.identity !== guest.identity),
+          visitors: room.visitors.filter(visitor => visitor.identity !== guest.identity),
         })));
       }
     } finally { setPending(false); }
@@ -109,30 +131,53 @@ export function BreakoutRooms({ api, meetingId, participants, moveToWaitingRoom,
       <BreakoutCountdown closesAt={closesAt} label="Rooms close in" />
       <p className="muted">{openSelection ? 'Attendees can choose their own rooms.' : 'Assigned participants move to their rooms.'}</p>
       {active.map(room => <section className="breakout-room" key={room.id || room.name}>
-        <h3>{room.name}</h3>
+        <div className="breakout-guest">
+          <h3>{room.name}</h3>
+          {roomId === room.id ? <span className="muted">Current room</span>
+            : <button className="button small" type="button" disabled={pending || visiting || !online}
+              aria-label={'Visit ' + room.name} onClick={() => onVisit(room.id)}>Visit</button>}
+        </div>
         {room.helpRequestedAt && <div className="breakout-actions">
           <span role="status">Help requested</span>
           <button className="button small" type="button" disabled={pending} aria-label={'Resolve help request for ' + room.name}
             onClick={() => submit({ action: 'resolve-help', roomId: room.id })}>Mark resolved</button>
         </div>}
         {!room.members.length && <p className="muted">No assigned participants</p>}
-        {room.members.map(guest => <div className="breakout-guest" key={guest.identity}>
-          <span>{guest.name}</span>
-          <button className="icon-button" disabled={pending} aria-label={'Move ' + guest.name + ' to waiting room'}
-            title="Move to waiting room" onClick={() => updateGuest(guest, moveToWaitingRoom)}><Hourglass size={16} /></button>
-          <button className="icon-button" disabled={pending} aria-label={'Remove ' + guest.name + ' from meeting'}
-            title="Remove from meeting" onClick={() => {
-              if (window.confirm('Remove ' + guest.name + ' from the meeting?')) updateGuest(guest, member => removeParticipant(member.identity));
-            }}><UserMinus size={16} /></button>
+        {room.members.map(guest => <div key={guest.identity}>
+          <div className="breakout-guest">
+            <span>{guest.name}</span>
+            <button className="icon-button" disabled={pending} aria-label={'Move ' + guest.name + ' to waiting room'}
+              title="Move to waiting room" onClick={() => updateGuest(guest, moveToWaitingRoom)}><Hourglass size={16} /></button>
+            <button className="icon-button" disabled={pending} aria-label={'Remove ' + guest.name + ' from meeting'}
+              title="Remove from meeting" onClick={() => {
+                if (window.confirm('Remove ' + guest.name + ' from the meeting?')) updateGuest(guest, member => removeParticipant(member.identity));
+              }}><UserMinus size={16} /></button>
+          </div>
+          <MoveAttendee guest={guest} from={room.id} meetingId={meetingId} rooms={active} disabled={pending || visiting || !online} submit={submit} />
+        </div>)}
+        {room.visitors.map(visitor => <div className="breakout-guest" key={visitor.identity}>
+          <span>{visitor.name} · {visitor.isHost ? 'Host' : 'Co-host'}</span>
+          {revokeVisitor && visitor.sid && <button className="icon-button" disabled={pending || visiting}
+            title="Revoke co-host access" aria-label={'Revoke co-host access for ' + visitor.name}
+            onClick={() => {
+              if (window.confirm('Revoke co-host access for ' + visitor.name + '? They will return to the main meeting.')) {
+                updateGuest(visitor, revokeVisitor);
+              }
+            }}><ShieldMinus size={16} /></button>}
         </div>)}
       </section>)}
+      {roomId === meetingId && attendees.length > 0 && <section className="breakout-room">
+        <h3>Main meeting</h3>
+        {attendees.map(guest => <MoveAttendee key={guest.identity} guest={guest} from={meetingId} meetingId={meetingId}
+          rooms={active} disabled={pending || visiting || !online} submit={submit} />)}
+      </section>}
       <form className="form" onSubmit={event => { event.preventDefault(); submit({ action: 'announce', text: announcement }); }}>
         <label>Announcement to rooms
           <textarea value={announcement} maxLength={300} rows={2} onChange={event => setAnnouncement(event.target.value)} />
         </label>
         <button className="button" disabled={pending || !announcement.trim()}><Send size={15} /> Send announcement</button>
       </form>
-      {online && <BreakoutVoiceSender api={api} meetingId={meetingId} rooms={active} prefs={prefs} />}
+      {online && roomId === meetingId && <BreakoutVoiceSender api={api} meetingId={meetingId} rooms={active} prefs={prefs} />}
       <div className="breakout-actions">
         <label>Return countdown
           <select value={closeDelay} onChange={event => setCloseDelay(event.target.value)}>

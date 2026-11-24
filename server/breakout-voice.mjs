@@ -14,7 +14,9 @@ const command = z.discriminatedUnion('action', [
 
 export function registerBreakoutVoice(api, { byIdentity, serial, meetingFor, getMeeting, activeRooms, requireSpeaker, send, log, error }) {
   const running = new Map();
-  function stop(meeting) { running.delete(meeting); }
+  function stop(meeting, actor) {
+    if (actor === undefined || running.get(meeting)?.actor === actor) running.delete(meeting);
+  }
   function sweep(now = Date.now()) {
     for (const [id, run] of running) if (run.expiresAt <= now || run.lastAt + 3500 <= now) stop(id);
   }

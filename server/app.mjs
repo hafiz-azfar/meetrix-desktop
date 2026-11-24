@@ -46,11 +46,16 @@ const schedule = z.object({
 const reschedule = z.object({ title: meetingTitle, startAt: z.iso.datetime(), duration }).strict();
 const join = z.object({ name: person, passcode: optionalPasscode, keyReady: z.boolean().optional() }).strict();
 const guestJoin = join.extend({ proof: z.string().regex(/^[a-f0-9]{32}$/) });
+const roomIdSchema = z.string().regex(/^(?:breakout_)?[A-Za-z0-9_-]{16}$/);
+const breakoutId = z.string().regex(/^breakout_[A-Za-z0-9_-]{16}$/);
 const routingRequest = z.object({
   key: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
-  roomId: z.string().regex(/^(?:breakout_)?[A-Za-z0-9_-]{16}$/),
+  roomId: roomIdSchema,
   placementEpoch: z.number().int().nonnegative().safe().default(0),
-  breakoutRoomId: z.string().regex(/^breakout_[A-Za-z0-9_-]{16}$/).nullable().optional(),
+  breakoutRoomId: breakoutId.nullable().optional(),
+}).strict();
+const moderatorRoomRequest = routingRequest.pick({ key: true, roomId: true, placementEpoch: true }).extend({
+  destination: breakoutId.nullable(),
 }).strict();
 const breakoutCommand = z.discriminatedUnion('action', [
   z.object({ action: z.literal('open-plan') }).strict(),
@@ -60,7 +65,8 @@ const breakoutCommand = z.discriminatedUnion('action', [
   }).strict()).min(1).max(8) }).strict(),
   z.object({ action: z.literal('close'), delaySeconds: z.number().int().min(1).max(120).optional() }).strict(),
   z.object({ action: z.literal('announce'), text: z.string().trim().min(1).max(300) }).strict(),
-  z.object({ action: z.literal('resolve-help'), roomId: z.string().regex(/^breakout_[A-Za-z0-9_-]{16}$/) }).strict(),
+  z.object({ action: z.literal('resolve-help'), roomId: breakoutId }).strict(),
+  z.object({ action: z.literal('move-attendee'), identity: participantIdentity, from: roomIdSchema, destination: breakoutId.nullable() }).strict(),
 ]);
 const placementTopic = 'meetrix.room-placement';
 const hostRolesTopic = 'meetrix.host-roles';
@@ -158,6 +164,11 @@ export function createApp(options, dependencies = {}) {
     ON CONFLICT(meeting, identity) DO UPDATE SET sid = excluded.sid`);
   const revokeCoHost = db.prepare('DELETE FROM meeting_cohosts WHERE meeting = ? AND identity = ?');
   const clearCoHosts = db.prepare('DELETE FROM meeting_cohosts WHERE meeting = ?');
+  const readHandoff = db.prepare('SELECT room, nonce, expires_at FROM moderator_room_handoffs WHERE meeting = ? AND identity = ?');
+  const saveHandoff = db.prepare(`INSERT INTO moderator_room_handoffs(meeting, identity, room, nonce, expires_at) VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(meeting, identity) DO UPDATE SET room=excluded.room, nonce=excluded.nonce, expires_at=excluded.expires_at`);
+  const dropHandoff = db.prepare('DELETE FROM moderator_room_handoffs WHERE meeting = ? AND identity = ?');
+  const expireHandoffs = db.prepare('DELETE FROM moderator_room_handoffs WHERE expires_at <= ?');
   const setDecision = db.prepare('UPDATE attendance SET decision = ? WHERE meeting = ? AND identity = ?');
   const beginWaiting = db.prepare(`UPDATE attendance SET decision = 'pending', requested_at = ?,
     placement_epoch = placement_epoch + 1, waiting_evicting = 1 WHERE meeting = ? AND identity = ?`);
@@ -280,6 +291,14 @@ export function createApp(options, dependencies = {}) {
         }
         return selectBreakout(current, identity, target.roomId, input.breakoutRoomId);
       }
+      const handoff = moderatorRoomMetadata(current.id, identity, target.roomId);
+      if (handoff) {
+        const account = req.get('authorization') ? await bearerAccount(req) : desktopAuth.session(req);
+        if ((typeof account === 'string' ? account : account?.identity) !== identity) {
+          throw new RequestError(403, 'Use your signed-in session to continue as co-host.');
+        }
+        await isActiveCoHost(current, identity);
+      }
       const roles = meetingRoles(current, target.roomId);
       const breakoutChoices = await availableBreakouts(current, identity);
       const closesAt = target.breakoutName ? breakouts.closesAt(current.id) : null;
@@ -289,7 +308,8 @@ export function createApp(options, dependencies = {}) {
         return { roomId: target.roomId, ...placement };
       }
       await ensureMediaRoom(target.roomId);
-      return { ...target, ...placement, token: await mediaToken(target.roomId, identity, participant?.name ?? current.owner_name) };
+      return { ...target, ...placement, token: await mediaToken(target.roomId, identity, participant?.name ?? current.owner_name,
+        moderatorRoomMetadata(current.id, identity, target.roomId)) };
     });
     res.json(grant);
   });
@@ -305,7 +325,8 @@ export function createApp(options, dependencies = {}) {
         throw new RequestError(403, 'Help requests are available from active breakout rooms.');
       }
       if (!breakouts.askForHelp(assigned.id)) return false;
-      await media(client => client.sendData(current.id, Uint8Array.of(1), DataPacket_Kind.RELIABLE,
+      const hostRoom = currentLocation(current.id, activeHost(current)).roomId;
+      await media(client => client.sendData(hostRoom, Uint8Array.of(1), DataPacket_Kind.RELIABLE,
         { topic: breakoutHelpTopic, destinationIdentities: [activeHost(current)] })).catch(() => {});
       return true;
     });
@@ -345,8 +366,8 @@ export function createApp(options, dependencies = {}) {
         throw new RequestError(403, 'Voice announcements require an open standard meeting.');
       }
       const delegated = identity === activeHost(meeting) ? null : findCoHost.get(meeting.id, identity);
-      if (identity !== activeHost(meeting) &&
-          (!delegated || findGuest.get(meeting.id, identity)?.decision !== 'admitted' || breakouts.assigned(meeting.id, identity))) {
+      if (breakouts.assigned(meeting.id, identity) || identity !== activeHost(meeting) &&
+          (!delegated || findGuest.get(meeting.id, identity)?.decision !== 'admitted')) {
         throw new RequestError(403, 'Only a connected breakout moderator can send a voice announcement.');
       }
       const participant = await mainParticipant(meeting, identity);
@@ -375,19 +396,30 @@ export function createApp(options, dependencies = {}) {
   function requireHost(meeting, actor) {
     if (activeHost(meeting) !== actor) throw new RequestError(403, 'Only the host can do that.');
   }
-  async function mainParticipant(meeting, identity) {
+  function mainParticipant(meeting, identity) {
+    return participantIn(meeting.id, identity);
+  }
+  async function participantIn(roomId, identity) {
     return media(async client => {
       try {
-        const participant = await client.getParticipant(meeting.id, identity);
+        const participant = await client.getParticipant(roomId, identity);
         return participant?.state === ParticipantInfo_State.ACTIVE ? participant : null;
       } catch (error) { if (isNotFound(error)) return null; throw error; }
     });
   }
   async function isActiveCoHost(meeting, identity) {
     const grant = findCoHost.get(meeting.id, identity);
-    if (!grant || findGuest.get(meeting.id, identity)?.decision !== 'admitted' || breakouts.assigned(meeting.id, identity)) return false;
-    const participant = await mainParticipant(meeting, identity);
-    return participant?.sid === grant.sid && findCoHost.get(meeting.id, identity)?.sid === grant.sid;
+    if (!grant || findGuest.get(meeting.id, identity)?.decision !== 'admitted') return false;
+    const { roomId } = currentLocation(meeting.id, identity);
+    const participant = await participantIn(roomId, identity);
+    if (!participant?.sid || findCoHost.get(meeting.id, identity)?.sid !== grant.sid ||
+        findGuest.get(meeting.id, identity)?.decision !== 'admitted' || currentLocation(meeting.id, identity).roomId !== roomId) return false;
+    if (participant.sid === grant.sid) return true;
+    const expected = moderatorRoomMetadata(meeting.id, identity, roomId);
+    if (!expected || participant.metadata !== expected) return false;
+    grantCoHost.run(meeting.id, identity, participant.sid);
+    dropHandoff.run(meeting.id, identity);
+    return true;
   }
   async function requireModerator(meeting, actor) {
     if (activeHost(meeting) === actor) return;
@@ -445,13 +477,22 @@ export function createApp(options, dependencies = {}) {
   }
   function currentLocation(meetingId, identity) {
     const assigned = breakouts.assigned(meetingId, identity);
-    return assigned ? { roomId: assigned.id, breakoutName: assigned.name } : { roomId: meetingId, breakoutName: null };
+    return { roomId: assigned?.id ?? meetingId, breakoutName: assigned?.name ?? null, moderatorVisit: Boolean(assigned?.moderatorVisit) };
+  }
+  function prepareModeratorHandoff(meeting, identity, room) {
+    if (findCoHost.get(meeting, identity)) {
+      saveHandoff.run(meeting, identity, room, 'meetrix-handoff:' + randomBytes(24).toString('base64url'), Date.now() + 40000);
+    }
+  }
+  function moderatorRoomMetadata(meeting, identity, room) {
+    const handoff = readHandoff.get(meeting, identity);
+    return handoff?.room === room && handoff.expires_at > Date.now() ? handoff.nonce : undefined;
   }
   function ensureMediaRoom(room) {
     return media(client => client.createRoom({ name: room, emptyTimeout: 120, departureTimeout: 60, maxParticipants: 100 }));
   }
-  async function mediaToken(room, identity, name) {
-    const token = new AccessToken(livekitKey, livekitSecret, { identity, name, ttl: '50s' });
+  async function mediaToken(room, identity, name, metadata) {
+    const token = new AccessToken(livekitKey, livekitSecret, { identity, name, metadata, ttl: '50s' });
     token.addGrant({ roomJoin: true, room, canPublish: true, canSubscribe: true, canPublishData: true, canUpdateOwnMetadata: false });
     return token.toJwt();
   }
@@ -485,9 +526,11 @@ export function createApp(options, dependencies = {}) {
     });
   }
   async function availableBreakouts(meeting, identity) {
-    if (meeting.encrypted || identity === activeHost(meeting)) return [];
+    const location = currentLocation(meeting.id, identity);
+    if (meeting.encrypted || identity === activeHost(meeting) || location.moderatorVisit) return [];
     const choices = breakouts.choices(meeting.id);
-    if (choices.length && await isActiveCoHost(meeting, identity)) return [];
+    if (choices.length && (moderatorRoomMetadata(meeting.id, identity, location.roomId) ||
+        await isActiveCoHost(meeting, identity))) return [];
     return choices;
   }
   async function selectBreakout(meeting, identity, currentRoom, destination) {
@@ -496,6 +539,9 @@ export function createApp(options, dependencies = {}) {
     if (destination && !choices.some(room => room.id === destination)) {
       throw new RequestError(404, 'That breakout room is unavailable.');
     }
+    return moveBetweenRooms(meeting, identity, currentRoom, destination);
+  }
+  async function moveBetweenRooms(meeting, identity, currentRoom, destination, { moderatorVisit = false, actor = identity } = {}) {
     const nextRoom = destination ?? meeting.id;
     if (nextRoom === currentRoom) return { ok: true };
     await ensureMediaRoom(nextRoom);
@@ -505,8 +551,10 @@ export function createApp(options, dependencies = {}) {
     await removeFromRooms([currentRoom], identity, { revokeTokenTs: BigInt(cutoff) });
     const remaining = cutoff * 1000 - Date.now();
     if (remaining > 0) await delay(remaining);
-    breakouts.select(meeting.id, identity, destination);
-    log.run(meeting.id, identity, 'select-breakout', nextRoom, Date.now());
+    breakouts.select(meeting.id, identity, destination, moderatorVisit);
+    if (moderatorVisit) prepareModeratorHandoff(meeting.id, identity, nextRoom);
+    if (actor !== identity) log.run(meeting.id, actor, 'reassign-breakout', identity, Date.now());
+    else log.run(meeting.id, identity, moderatorVisit ? 'moderator-room-move' : 'select-breakout', nextRoom, Date.now());
     return { ok: true };
   }
   async function completeWaitingEviction(meeting, identity) {
@@ -526,7 +574,8 @@ export function createApp(options, dependencies = {}) {
   }
   function meetingRoles(meeting, roomId = meeting.id) {
     return { hostIdentity: activeHost(meeting), hostVersion: meeting.host_version,
-      coHosts: !meeting.encrypted && roomId === meeting.id ? listCoHosts.all(meeting.id) : [] };
+      coHosts: meeting.encrypted ? [] : listCoHosts.all(meeting.id).filter(({ identity }) =>
+        roomId === meeting.id || breakouts.assigned(meeting.id, identity)?.id === roomId) };
   }
   function signalHostTransfer(meeting) {
     const data = new TextEncoder().encode(JSON.stringify({
@@ -534,10 +583,36 @@ export function createApp(options, dependencies = {}) {
     }));
     return media(client => client.sendData?.(meeting.id, data, DataPacket_Kind.RELIABLE, { topic: hostRolesTopic })).catch(() => {});
   }
-  function muteTracks(client, meeting, participant, source) {
+  function muteTracks(client, roomId, participant, source) {
     return Promise.all(participant.tracks.filter(track => track.source === source && !track.muted)
-      .map(track => client.mutePublishedTrack(meeting.id, participant.identity, track.sid, true)));
+      .map(track => client.mutePublishedTrack(roomId, participant.identity, track.sid, true)));
   }
+
+  api.post('/meetings/:id/moderator-location', byIdentity(30), async (req, res) => {
+    const input = moderatorRoomRequest.parse(req.body);
+    const meeting = meetingFor(req);
+    const result = await serial(meeting.id, async () => {
+      const current = findMeeting.get(meeting.id);
+      if (!current.opened_at || meetingEnded(current) || current.encrypted) {
+        throw new RequestError(409, 'Moderator visits require an open standard meeting.');
+      }
+      if (breakouts.identity(current.id, input.key) !== req.identity) throw new RequestError(403, 'Use your active meeting session.');
+      const location = currentLocation(current.id, req.identity);
+      if (location.roomId !== input.roomId || (findGuest.get(current.id, req.identity)?.placement_epoch ?? 0) !== input.placementEpoch) {
+        throw new RequestError(409, 'Your room changed. Try again from your current room.');
+      }
+      const retainedRole = activeHost(current) === req.identity || await isActiveCoHost(current, req.identity);
+      if (!retainedRole && !(input.destination === null && location.moderatorVisit && findGuest.get(current.id, req.identity)?.decision === 'admitted')) {
+        throw new RequestError(403, 'Only the host or a connected co-host can visit a breakout room.');
+      }
+      if (!(await participantIn(location.roomId, req.identity))) throw new RequestError(409, 'Connect to the room before moving.');
+      if (input.destination && (!breakouts.hasRoom(current.id, input.destination) ||
+          (breakouts.closesAt(current.id) ?? Infinity) <= Date.now())) throw new RequestError(404, 'That breakout room has closed.');
+      if (location.roomId === current.id && input.destination) breakoutVoice.stop(current.id, req.identity);
+      return moveBetweenRooms(current, req.identity, location.roomId, input.destination, { moderatorVisit: retainedRole });
+    });
+    res.json(result);
+  });
 
   api.get('/meetings', (req, res) => {
     const rows = db.prepare(`
@@ -648,7 +723,7 @@ export function createApp(options, dependencies = {}) {
       if (current.opened_at) await ensureMediaRoom(location.roomId);
       const attendance = findGuest.get(current.id, identity);
       const name = attendance?.name ?? current.owner_name;
-      const token = await mediaToken(location.roomId, identity, name);
+      const token = await mediaToken(location.roomId, identity, name, moderatorRoomMetadata(current.id, identity, location.roomId));
       const routingKey = current.encrypted ? undefined : breakouts.issueKey(current.id, identity);
       const breakoutChoices = await availableBreakouts(current, identity);
       const closesAt = location.breakoutName ? breakouts.closesAt(current.id) : null;
@@ -712,6 +787,13 @@ export function createApp(options, dependencies = {}) {
     breakoutVoice.stop(meeting);
     const existing = breakouts.list(meeting);
     const selfSelect = breakouts.choices(meeting).length > 0;
+    const current = findMeeting.get(meeting);
+    await Promise.all(existing.flatMap(room => room.members.map(async identity => {
+      if (!findCoHost.get(meeting, identity) || !breakouts.assigned(meeting, identity)?.moderatorVisit) return;
+      if (moderatorRoomMetadata(meeting, identity, room.id) || await isActiveCoHost(current, identity).catch(() => false)) {
+        prepareModeratorHandoff(meeting, identity, meeting);
+      }
+    })));
     if (breakouts.close(meeting)) log.run(meeting, actor, 'close-breakouts', null, Date.now());
     await Promise.all([
       ...existing.filter(room => room.members.length).map(room => signalPlacement(room.id, room.members)),
@@ -721,10 +803,23 @@ export function createApp(options, dependencies = {}) {
   }
 
   function breakoutView(meeting) {
-    return { closesAt: breakouts.closesAt(meeting), selfSelect: breakouts.choices(meeting).length > 0, rooms: breakouts.list(meeting).map(({ id, name, members }) => ({
-      id, name, helpRequestedAt: breakouts.helpRequestedAt(id), members: members.map(identity => findGuest.get(meeting, identity))
-        .filter(guest => guest?.decision === 'admitted').map(({ identity, name }) => ({ identity, name })),
-    })) };
+    const current = findMeeting.get(meeting);
+    const host = activeHost(current);
+    const rooms = breakouts.list(meeting).map(({ id, name, members }) => {
+      const attendees = [];
+      const visitors = [];
+      for (const identity of members) {
+        const guest = findGuest.get(meeting, identity);
+        if (identity === host) visitors.push({ identity, name: guest?.name ?? current.owner_name, isHost: true });
+        else if (guest?.decision === 'admitted') {
+          const delegate = findCoHost.get(meeting, identity);
+          if (delegate && breakouts.assigned(meeting, identity)?.moderatorVisit) visitors.push({ identity, name: guest.name, sid: delegate.sid, isHost: false });
+          else attendees.push({ identity, name: guest.name });
+        }
+      }
+      return { id, name, helpRequestedAt: breakouts.helpRequestedAt(id), members: attendees, visitors };
+    });
+    return { closesAt: breakouts.closesAt(meeting), selfSelect: breakouts.choices(meeting).length > 0, rooms };
   }
 
   api.get('/meetings/:id/breakouts', async (req, res) => {
@@ -764,6 +859,24 @@ export function createApp(options, dependencies = {}) {
       if (!current.opened_at || meetingEnded(current)) throw new RequestError(409, 'Start the meeting before managing breakout rooms.');
       if (current.encrypted) throw new RequestError(403, 'Breakout rooms are unavailable in encrypted meetings.');
       const existing = breakouts.list(current.id);
+      if (command.action === 'move-attendee') {
+        admit(current, command.identity);
+        const location = currentLocation(current.id, command.identity);
+        if (location.roomId !== command.from) throw new RequestError(409, 'That attendee changed rooms. Refresh and try again.');
+        if (location.moderatorVisit || command.identity === activeHost(current) ||
+            moderatorRoomMetadata(current.id, command.identity, location.roomId) || await isActiveCoHost(current, command.identity)) {
+          throw new RequestError(403, 'Hosts and co-hosts choose which rooms to visit.');
+        }
+        if (!existing.length || (command.destination && (!existing.some(room => room.id === command.destination) ||
+            (breakouts.closesAt(current.id) ?? Infinity) <= Date.now()))) {
+          throw new RequestError(404, 'That breakout room has closed.');
+        }
+        if (location.roomId === current.id && !(await mainParticipant(current, command.identity))) {
+          throw new RequestError(409, 'That attendee is no longer connected to the main meeting.');
+        }
+        await moveBetweenRooms(current, command.identity, location.roomId, command.destination, { actor: req.identity });
+        return breakoutView(current.id);
+      }
       if (command.action === 'resolve-help') {
         if (!existing.some(room => room.id === command.roomId)) throw new RequestError(404, 'This breakout room is unavailable.');
         breakouts.resolveHelp(command.roomId);
@@ -799,7 +912,7 @@ export function createApp(options, dependencies = {}) {
         for (const identity of identities) admit(current, identity);
         for (const identity of identities) {
           if (identity === activeHost(current) || await isActiveCoHost(current, identity)) {
-            throw new RequestError(409, 'The host and connected co-hosts stay in the main meeting.');
+            throw new RequestError(409, 'Hosts and connected co-hosts can visit rooms after they open.');
           }
         }
         await cloud?.stopMeeting(current, 'Breakout rooms opened.');
@@ -820,6 +933,7 @@ export function createApp(options, dependencies = {}) {
       const current = findMeeting.get(initial.id);
       const hostIdentity = activeHost(current);
       const host = hostIdentity === req.identity;
+      const { roomId } = currentLocation(current.id, req.identity);
       if (['end', 'co-host', 'transfer-host'].includes(command.action)) requireHost(current, req.identity);
       else await requireModerator(current, req.identity);
       if (command.action === 'end') {
@@ -829,7 +943,7 @@ export function createApp(options, dependencies = {}) {
       if (meetingEnded(current)) throw new RequestError(410, 'This meeting has ended.');
       if (command.action === 'transfer-host') {
         if (current.encrypted) throw new RequestError(403, 'Host transfer is unavailable in encrypted meetings.');
-        if (!current.opened_at || command.identity === hostIdentity || command.identity.startsWith('guest_')) {
+        if (!current.opened_at || roomId !== current.id || command.identity === hostIdentity || command.identity.startsWith('guest_')) {
           throw new RequestError(409, 'Choose another signed-in participant in the main meeting.');
         }
         admit(current, command.identity);
@@ -865,9 +979,14 @@ export function createApp(options, dependencies = {}) {
           if (participant?.sid !== command.sid || breakouts.assigned(current.id, command.identity)) {
             throw new RequestError(409, 'That participant must be connected to the main meeting.');
           }
+          dropHandoff.run(current.id, command.identity);
           grantCoHost.run(current.id, command.identity, command.sid);
         } else if (findCoHost.get(current.id, command.identity)?.sid === command.sid) {
+          const visiting = breakouts.assigned(current.id, command.identity);
+          if (visiting?.moderatorVisit) await moveBetweenRooms(current, command.identity, visiting.id, null, { actor: req.identity });
           revokeCoHost.run(current.id, command.identity);
+        } else if (breakouts.assigned(current.id, command.identity)?.moderatorVisit) {
+          throw new RequestError(409, 'The co-host connection changed. Refresh the participant list and try again.');
         }
         rolesChanged = true;
       }
@@ -907,14 +1026,17 @@ export function createApp(options, dependencies = {}) {
       }
       if (command.action === 'mute' || command.action === 'stop-video') {
         admit(current, command.identity);
+        if (currentLocation(current.id, command.identity).roomId !== roomId) {
+          throw new RequestError(409, 'That participant is in a different room.');
+        }
         await media(async client => {
-          const target = await client.getParticipant(current.id, command.identity);
+          const target = await client.getParticipant(roomId, command.identity);
           const source = command.action === 'mute' ? TrackSource.MICROPHONE : TrackSource.CAMERA;
-          await muteTracks(client, current, target, source);
+          await muteTracks(client, roomId, target, source);
         });
       }
       if (command.action === 'ask-unmute') {
-        if (current.encrypted || breakouts.assigned(current.id, command.identity)) {
+        if (current.encrypted || roomId !== current.id || breakouts.assigned(current.id, command.identity)) {
           throw new RequestError(403, 'Microphone requests are available in the main room of standard meetings.');
         }
         admit(current, command.identity);
@@ -926,16 +1048,16 @@ export function createApp(options, dependencies = {}) {
       if (command.action === 'mute-all') {
         const delegates = new Map(listCoHosts.all(current.id).map(({ identity, sid }) => [identity, sid]));
         await media(async client => {
-          const attendees = (await client.listParticipants(current.id)).filter(person => person.identity !== hostIdentity &&
+          const attendees = (await client.listParticipants(roomId)).filter(person => person.identity !== hostIdentity &&
             person.identity !== req.identity && delegates.get(person.identity) !== person.sid);
-          const results = await Promise.allSettled(attendees.map(person => muteTracks(client, current, person, TrackSource.MICROPHONE)));
+          const results = await Promise.allSettled(attendees.map(person => muteTracks(client, roomId, person, TrackSource.MICROPHONE)));
           if (results.some(result => result.status === 'rejected' && !isNotFound(result.reason))) {
             throw new RequestError(502, 'Some microphones could not be muted. Try again.');
           }
         });
       }
       log.run(current.id, req.identity, command.action, command.identity ?? null, Date.now());
-      if (rolesChanged) await signalPlacement(current.id);
+      if (rolesChanged) await Promise.all([signalPlacement(current.id), ...breakouts.list(current.id).map(room => signalPlacement(room.id))]);
       return meetingRoles(current);
     });
     res.json({ ok: true, ...roles });
@@ -1072,6 +1194,7 @@ export function createApp(options, dependencies = {}) {
   const timer = setInterval(async () => {
     desktopAuth.sweep();
     auth.sweep();
+    expireHandoffs.run(Date.now());
     breakoutVoice.sweep();
     for (const meeting of expired.all(Date.now() - maxDuration)) {
       try { await serial(meeting.id, () => {

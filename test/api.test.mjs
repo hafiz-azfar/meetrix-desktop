@@ -902,6 +902,106 @@ test('co-hosts can moderate only while their assigned LiveKit session is connect
   assert.equal((await moderate(id, { action: 'lock', locked: true }, 'guest')).status, 403);
 });
 
+test('moderator visits require matching credentials and bind co-host access to the new room connection', async t => {
+  const { api, create, connect, moderate, calls, livePeople, failedRemovals } = await fixture(t);
+  const { id } = (await create({ lobby: false })).json;
+  const path = '/meetings/' + id;
+  const post = (endpoint, body, token) => api(path + endpoint, { method: 'POST', body, token });
+  const publish = (identity, sid, metadata, tracks = []) =>
+    livePeople.set(identity, { identity, sid, metadata, tracks, state: ParticipantInfo_State.ACTIVE });
+  const placement = (session, roomId = id) => ({ key: session.routingKey, roomId, placementEpoch: session.placementEpoch });
+  const move = (session, destination, token, roomId = id) =>
+    post('/moderator-location', { ...placement(session, roomId), destination }, token);
+  const grant = (sid, enabled = true) => moderate(id, { action: 'co-host', identity: 'guest', sid, enabled });
+  const verifier = new TokenVerifier(livekitKey, livekitSecret);
+  const lobby = () => api(path + '/lobby', { token: 'guest' });
+  const owner = (await connect(id, 'owner')).json;
+  const delegate = (await connect(id, 'guest')).json;
+  const attendee = (await connect(id, 'attendee')).json;
+  await connect(id, 'stranger');
+  publish('owner', 'PA_owner');
+  publish('guest', 'PA_main');
+  publish('attendee', 'PA_attendee', '', [{ sid: 'TR_attendee', source: TrackSource.MICROPHONE }]);
+  assert.equal((await grant('PA_main')).status, 200);
+  const opened = await post('/breakouts', { action: 'open', rooms: [{ name: 'Review', members: ['attendee'] }] }, 'owner');
+  const roomId = opened.json.rooms[0].id;
+  assert.equal((await move(attendee, roomId, 'attendee', roomId)).status, 403);
+  assert.equal((await move(delegate, roomId, 'owner')).status, 403);
+  assert.equal((await move(delegate, roomId, '')).status, 401);
+  assert.equal((await move(delegate, 'breakout_aaaaaaaaaaaaaaaa', 'guest')).status, 404);
+  failedRemovals.add('guest');
+  assert.equal((await move(delegate, roomId, 'guest')).status, 502);
+  assert.equal((await post('/placement', placement(delegate), 'guest')).json.roomId, id);
+  failedRemovals.delete('guest');
+
+  assert.equal((await move(delegate, roomId, 'guest')).status, 200);
+  assert.equal((await move(delegate, roomId, 'guest')).status, 409);
+  const removed = calls.find(call => call[0] === 'remove' && call[1] === id && call[2] === 'guest');
+  assert.equal(typeof removed[3].revokeTokenTs, 'bigint');
+  assert.equal((await post('/placement', placement(delegate), '')).status, 403);
+  assert.equal((await post('/placement', placement(delegate), 'stranger')).status, 403);
+  const visit = (await post('/placement', placement(delegate), 'guest')).json;
+  assert.equal(visit.moderatorVisit, true);
+  const claims = await verifier.verify(visit.token);
+  assert.equal(claims.video.room, roomId);
+  assert.equal(claims.video.canUpdateOwnMetadata, false);
+  assert.ok(!claims.video.roomAdmin && !claims.video.roomRecord);
+  publish('guest', 'PA_unrelated', 'forged');
+  assert.equal((await lobby()).status, 403);
+  publish('guest', 'PA_visit', claims.metadata);
+  assert.deepEqual((await lobby()).json.coHosts, [{ identity: 'guest', sid: 'PA_visit' }]);
+  assert.equal((await moderate(id, { action: 'mute', identity: 'stranger' }, 'guest')).status, 409);
+  assert.equal((await moderate(id, { action: 'mute', identity: 'attendee' }, 'guest')).status, 200);
+  assert.deepEqual(calls.at(-1), ['mute', roomId, 'attendee', 'TR_attendee']);
+
+  assert.equal((await move(owner, roomId, 'owner')).status, 200);
+  const help = await post('/breakout-help', { key: attendee.routingKey }, 'attendee');
+  assert.equal(help.json.requested, true);
+  assert.deepEqual(calls.at(-1), ['data', roomId, { topic: breakoutHelpTopic, destinationIdentities: ['owner'] }]);
+  const rooms = (await api(path + '/breakouts')).json.rooms;
+  assert.deepEqual(rooms[0].visitors.map(visitor => [visitor.identity, visitor.isHost]), [['guest', false], ['owner', true]]);
+  assert.equal((await grant('PA_visit', false)).status, 200);
+  const revoked = (await post('/placement', placement(delegate, roomId), 'guest')).json;
+  assert.equal(revoked.roomId, id);
+  assert.equal(revoked.moderatorVisit, false);
+  const revokedClaims = await verifier.verify(revoked.token);
+  assert.ok(!revokedClaims.metadata);
+  publish('guest', 'PA_return', claims.metadata);
+  assert.equal((await lobby()).status, 403);
+  assert.equal((await post('/breakouts', { action: 'close' }, 'owner')).status, 200);
+  assert.equal((await post('/placement', placement(owner, roomId), 'owner')).json.roomId, id);
+});
+
+test('moderators can reassign an admitted attendee while breakouts are open', async t => {
+  const { api, create, connect, moderate, calls, livePeople } = await fixture(t);
+  const { id } = (await create({ lobby: false })).json;
+  const path = '/meetings/' + id;
+  const post = (body, token = 'owner') => api(path + '/breakouts', { method: 'POST', body, token });
+  await connect(id, 'owner');
+  const guest = (await connect(id, 'guest')).json;
+  await connect(id, 'attendee');
+  livePeople.set('guest', { identity: 'guest', sid: 'PA_guest', state: ParticipantInfo_State.ACTIVE });
+  await moderate(id, { action: 'co-host', identity: 'guest', sid: 'PA_guest', enabled: true });
+  const opened = await post({ action: 'open', rooms: [{ name: 'Review', members: ['attendee'] }, { name: 'Discussion', members: [] }] });
+  const [review, discussion] = opened.json.rooms;
+  const move = { action: 'move-attendee', identity: 'attendee', from: review.id, destination: discussion.id };
+  assert.equal((await post(move, 'attendee')).status, 403);
+  assert.equal((await post({ ...move, identity: 'guest', from: id })).status, 403);
+  assert.equal((await post({ ...move, destination: 'breakout_aaaaaaaaaaaaaaaa' })).status, 404);
+  const reassigned = await post(move, 'guest');
+  assert.equal(reassigned.status, 200);
+  assert.deepEqual(reassigned.json.rooms[0].members, []);
+  assert.deepEqual(reassigned.json.rooms[1].members.map(member => member.identity), ['attendee']);
+  assert.equal((await post(move)).status, 409);
+  const returned = await post({ ...move, from: discussion.id, destination: null });
+  assert.equal(returned.status, 200);
+  assert.equal(returned.json.rooms[1].members.length, 0);
+  assert.deepEqual(calls.filter(call => call[0] === 'remove').map(call => call.slice(1, 3)),
+    [[review.id, 'attendee'], [discussion.id, 'attendee']]);
+  const delegate = await api(path + '/placement', { method: 'POST', body: { key: guest.routingKey, roomId: id } });
+  assert.equal(delegate.json.roomId, id);
+});
+
 test('a live host transfer preserves the organizer and replaces in-room authority', async t => {
   const { api, create, connect, moderate, calls, livePeople } = await fixture(t);
   const { id } = (await create({ lobby: false })).json;

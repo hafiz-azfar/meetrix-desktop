@@ -282,6 +282,9 @@ export function openDatabase(filename) {
     db.exec('ALTER TABLE meetings ADD COLUMN allow_guests INTEGER NOT NULL DEFAULT 0');
   }
   const attendanceColumns = new Set(db.prepare('PRAGMA table_info(attendance)').all().map(column => column.name));
+  if (!db.prepare('PRAGMA table_info(breakout_members)').all().some(column => column.name === 'moderator_visit')) {
+    db.exec('ALTER TABLE breakout_members ADD COLUMN moderator_visit INTEGER NOT NULL DEFAULT 0');
+  }
   if (!attendanceColumns.has('placement_epoch')) db.exec('ALTER TABLE attendance ADD COLUMN placement_epoch INTEGER NOT NULL DEFAULT 0');
   if (!attendanceColumns.has('waiting_evicting')) db.exec('ALTER TABLE attendance ADD COLUMN waiting_evicting INTEGER NOT NULL DEFAULT 0');
   for (const table of ['desktop_sign_ins', 'desktop_sessions', 'attendance']) {
@@ -312,6 +315,15 @@ export function openDatabase(filename) {
     CREATE TABLE IF NOT EXISTS breakout_help_requests (
       room TEXT PRIMARY KEY REFERENCES breakout_rooms(id) ON DELETE CASCADE,
       requested_at INTEGER NOT NULL
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS moderator_room_handoffs (
+      meeting TEXT NOT NULL,
+      identity TEXT NOT NULL,
+      room TEXT NOT NULL,
+      nonce TEXT NOT NULL,
+      expires_at INTEGER NOT NULL,
+      PRIMARY KEY (meeting, identity),
+      FOREIGN KEY (meeting, identity) REFERENCES meeting_cohosts(meeting, identity) ON DELETE CASCADE
     ) STRICT;
     CREATE INDEX IF NOT EXISTS team_message_threads ON team_messages(channel, reply_to, id DESC);
     CREATE INDEX IF NOT EXISTS team_message_replies ON team_messages(reply_to) WHERE reply_to IS NOT NULL;
