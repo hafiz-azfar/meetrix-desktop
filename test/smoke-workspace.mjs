@@ -147,10 +147,33 @@ try {
   await visitor.getByText("You're booked").waitFor();
   const invite = await visitor.getByRole('link', { name: 'Open meeting link' }).getAttribute('href');
   assert.match(invite, /\/join\?m=[A-Za-z0-9_-]{16}$/);
+  await owner.getByRole('button', { name: 'Settings', exact: true }).click();
+  await owner.getByRole('button', { name: 'Keyboard shortcuts', exact: true }).click();
+  await owner.getByLabel('Push-to-talk key').selectOption('F8');
   await owner.getByRole('button', { name: 'Meetings', exact: true }).click();
   const scheduled = owner.locator('article').filter({ hasText: 'Office hours' });
   await scheduled.getByRole('button', { name: 'Open' }).click();
   await owner.getByRole('button', { name: 'Enter room' }).click();
+  await owner.bringToFront();
+  try { await owner.getByText('Connected', { exact: true }).waitFor({ timeout: 45_000 }); }
+  catch (failure) {
+    console.error((await owner.locator('body').innerText()).slice(0, 700));
+    throw failure;
+  }
+  await owner.getByRole('button', { name: 'Unmute', exact: true }).waitFor();
+  await owner.waitForFunction(() => document.hasFocus() && JSON.parse(localStorage.getItem('meetrix-devices')).pushToTalk === 'F8');
+  await owner.evaluate(() => document.activeElement.blur());
+  await owner.keyboard.down('F8');
+  await owner.getByText('Talking while key is held', { exact: true }).waitFor();
+  await owner.getByRole('button', { name: 'Mute', exact: true }).waitFor();
+  await owner.keyboard.up('F8');
+  await owner.getByRole('button', { name: 'Unmute', exact: true }).waitFor();
+  await owner.keyboard.down('F8');
+  await owner.getByText('Talking while key is held', { exact: true }).waitFor();
+  await owner.evaluate(() => window.dispatchEvent(new Event('blur')));
+  await owner.getByRole('button', { name: 'Unmute', exact: true }).waitFor();
+  await owner.keyboard.up('F8');
+
   await owner.getByRole('button', { name: 'Notes', exact: true }).click();
   await owner.getByText('AI meeting summary', { exact: true }).click();
   await owner.getByLabel('Text to summarize').fill(
@@ -160,8 +183,27 @@ try {
   const summary = owner.getByLabel('Summary draft');
   await summary.waitFor({ timeout: 95_000 });
   assert.match(await summary.inputValue(), /launch|release/i);
+  await owner.getByRole('button', { name: 'Captions', exact: true }).click();
+  await owner.getByRole('button', { name: 'Meeting recap', exact: true }).click();
+  await owner.getByRole('button', { name: 'Start collecting captions' }).click();
+  await owner.getByRole('button', { name: 'Captions', exact: true }).click();
+  await owner.getByRole('textbox', { name: 'Caption text' }).fill('The software launch is approved for Friday. Maya will prepare the release notes.');
+  await owner.getByRole('button', { name: 'Send caption' }).click();
+  await owner.getByRole('button', { name: 'Meeting recap', exact: true }).click();
+  await owner.getByText('1 caption line collected.').waitFor();
+  await owner.getByRole('button', { name: 'Leave', exact: true }).click();
+  await owner.getByRole('button', { name: 'End for everyone' }).click();
+  await owner.getByRole('heading', { name: 'Meeting recap', level: 1 }).waitFor();
+  const recap = owner.getByLabel('Recap draft');
+  await recap.waitFor({ timeout: 95_000 });
+  assert.match(await recap.inputValue(), /launch|release/i);
+  const recapDownload = owner.waitForEvent('download');
+  await owner.getByRole('button', { name: 'Download recap' }).click();
+  assert.match(await readFile(await (await recapDownload).path(), 'utf8'), /launch|release/i);
+  await owner.getByRole('button', { name: 'Return to workspace' }).click();
+  await owner.getByRole('button', { name: 'Bookings', exact: true }).waitFor();
   assert.deepEqual(networks, []);
-  console.log('Tasks, Canvas, local WebM Clips, team chat, guest booking, and offline meeting summaries passed.');
+  console.log('Tasks, Canvas, local WebM Clips, team chat, guest booking, push-to-talk, and automatic offline recap passed.');
 } finally {
   await browser?.close();
   backend?.stop();

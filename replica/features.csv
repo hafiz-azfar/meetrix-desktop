@@ -13,8 +13,8 @@ F11,Security,End-to-end encrypted calls,should,yes,yes,Separate shared key for e
 F12,Meetings,30-hour meetings for 100 participants,should,yes,partial,Limits configured; high-scale verification pending
 F13,Collaboration,Meeting notes and export,should,yes,yes,Manual shared notes in standard rooms
 F14,Pro,Cloud recording and storage,should,yes,partial,Hosted LiveKit Egress integration with private S3 and authorized downloads. Production upload unverified
-F15,Pro,AI note-taking and summaries,should,yes,partial,On-device drafts from a selected English excerpt; automatic full-meeting summaries pending
-F16,Pro,Recurring scheduling and calendar sync,should,yes,partial,Daily weekday weekly and monthly recurrence with custom intervals and up to 52 dates with preview plus ICS downloads and an owner calendar feed
+F15,Pro,AI note-taking and summaries,should,yes,partial,On-device excerpt summaries and automatic end-of-meeting recaps from locally collected shared captions
+F16,Pro,Recurring scheduling and calendar sync,should,yes,partial,Daily weekday weekly and monthly recurrence with custom intervals and up to 52 dates with preview plus ICS downloads and an owner calendar feed plus manual Google Calendar push/pull
 F17,Pro,Whiteboard and breakout rooms,should,yes,partial,Whiteboard and manually assigned or self-selected rooms with text announcements and timed returns
 F18,Pro,Live captions and translation,should,yes,partial,Manual and automatic English captions with per-viewer size and contrast and on-device Hindi and Spanish translation and export
 F19,Workplace,Team chat mail and phone,could,yes,partial,Member-scoped text channels with expiring invite codes; mail and phone pending
@@ -28,7 +28,7 @@ F26,Meetings,Mute all attendees,should,yes,yes,Mutes attendee microphones in the
 F27,Meetings,Ask to unmute and stop attendee video,should,yes,yes,Moderators can stop camera tracks and send a targeted microphone request
 F28,Meetings,Virtual camera backgrounds and blur,should,yes,partial,On-device blur and local image backgrounds with previews in Settings and before joining
 F29,Meetings,Transfer host during a meeting,should,yes,yes,Transfer to a connected signed-in attendee in the main room of a standard meeting
-F30,Meetings,Share sound with a display,should,yes,yes,Opt-in system audio on Windows and browser-supported source audio
+F30,Meetings,Share sound with a display,should,yes,yes,Opt-in system audio on Windows and browser-supported source audio including audio-only publication
 F31,Meetings,Move an attendee back to the waiting room,should,yes,yes,Host and co-host controls with a fresh media connection on readmission
 F32,Collaboration,Presentation annotations,should,yes,partial,Freehand shapes and text with gated attendee contributions and presenter clearing and PNG export
 F33,Meetings,Connection statistics and diagnostics,should,yes,yes,Local WebRTC metrics without participant names or network addresses

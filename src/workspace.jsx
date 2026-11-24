@@ -9,6 +9,7 @@ import { maxOccurrences, maxRepeatInterval, meetingOccurrences } from './meeting
 import { generateRoomKey, validRoomKey } from './encryption.js';
 import { Logo, Dialog } from './ui.jsx';
 import { TeamChat } from './team-chat.jsx';
+import { GoogleCalendarConnection, GoogleMeetingSync } from './google-calendar.jsx';
 import { CalendarSubscription } from './calendar-subscription.jsx';
 import { Clips } from './clips.jsx';
 import { BookingWorkspace } from './booking-workspace.jsx';
@@ -236,7 +237,7 @@ export function Workspace({ config, user, accountControl, prefs, updatePrefs }) 
   const [meetings, setMeetings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [notice, updateNotice] = useState(null);
-  const [modal, setModal] = useState(inviteCode ? 'join' : '');
+  const [modal, setModal] = useState(() => config.googleCalendar && new URLSearchParams(location.search).has('googleCalendar') ? 'google-calendar' : inviteCode ? 'join' : '');
   const [target, setTarget] = useState(null);
   const [editing, setEditing] = useState(null);
   const [archived, setArchived] = useState(null);
@@ -314,6 +315,7 @@ export function Workspace({ config, user, accountControl, prefs, updatePrefs }) 
         </>}
         {page === 'meetings' && <div className="page-head"><h1>Meetings</h1><div className="meeting-actions">
           <button className="button" onClick={() => setModal('calendar-subscription')}>Calendar subscription</button>
+          {config.googleCalendar && <button className="button" onClick={() => setModal('google-calendar')}>Google Calendar</button>}
           {config.cloudRecording && <button className="button" onClick={() => setModal('cloud-recordings')}>
             <ArrowDownToLine size={16} /> Cloud recordings</button>}
           <button className="button" onClick={() => setModal('join')}><DoorOpen size={17} /> Join</button>
@@ -341,9 +343,12 @@ export function Workspace({ config, user, accountControl, prefs, updatePrefs }) 
       </div>
     </main>
     {['start', 'schedule'].includes(modal) && <MeetingForm mode={modal} api={api} name={name} close={() => setModal('')} onCreated={created} />}
-    {editing && modal !== 'edit' && <Dialog title={editing.title} close={() => setEditing(null)}><div className="dialog-actions"><button className="button danger" onClick={() => cancel(editing)}>Cancel meeting</button><button className="button primary" onClick={() => setModal('edit')}>Reschedule</button></div></Dialog>}
+    {editing && modal !== 'edit' && <Dialog title={editing.title} close={() => setEditing(null)}>
+      {config.googleCalendar && <GoogleMeetingSync api={api} meeting={editing} onChanged={refresh} />}
+      <div className="dialog-actions"><button className="button danger" onClick={() => cancel(editing)}>Cancel meeting</button><button className="button primary" onClick={() => setModal('edit')}>Reschedule</button></div></Dialog>}
     {editing && modal === 'edit' && <MeetingForm mode="edit" meeting={editing} api={api} name={name} close={() => { setModal(''); setEditing(null); }} onCreated={meeting => { setEditing(null); created(meeting, true); }} />}
     {archived && <Dialog title={archived.title + ' · Notes'} close={() => setArchived(null)}><Notes api={api} id={archived.id} readOnly /></Dialog>}
+    {modal === 'google-calendar' && <GoogleCalendarConnection api={api} close={() => setModal('')} />}
     {modal === 'calendar-subscription' && <CalendarSubscription api={api} close={() => setModal('')} />}
     {modal === 'cloud-recordings' && <CloudRecordingLibrary api={api} close={() => setModal('')} />}
     {modal.startsWith('join') && <JoinForm code={modal === 'join' ? inviteCode || '' : modal.slice(5)} close={() => setModal('')} onJoin={enter} />}

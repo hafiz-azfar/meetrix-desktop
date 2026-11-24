@@ -44,6 +44,8 @@ try {
             video: media.getVideoTracks().map(track => track.readyState),
             audio: media.getAudioTracks().map(track => track.readyState),
           };
+          media.getVideoTracks().forEach(track => track.stop());
+          window.meetrixShareResult.audioWithoutVideo = media.getAudioTracks().map(track => track.readyState);
           media.getTracks().forEach(track => track.stop());
         } catch (error) { window.meetrixShareResult = { error: error.name }; }
       };
@@ -61,9 +63,9 @@ try {
   assert.match(declined.prompt.choice.detail, /system audio/);
   const silent = await capture(false);
   assert.deepEqual(silent.prompt.types, ['screen', 'window']);
-  assert.deepEqual(silent.tracks, { video: ['live'], audio: [] });
+  assert.deepEqual(silent.tracks, { video: ['live'], audio: [], audioWithoutVideo: [] });
   const audible = await capture(true);
-  assert.deepEqual(audible.tracks, { video: ['live'], audio: ['live'] });
+  assert.deepEqual(audible.tracks, { video: ['live'], audio: ['live'], audioWithoutVideo: ['live'] });
   console.log('Windows native capture passed for cancellation, video only, and opt-in display audio.');
 } finally {
   await app?.close();

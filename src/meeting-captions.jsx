@@ -13,7 +13,7 @@ const captionerTopic = 'meetrix.captioner';
 const encoder = new TextEncoder();
 const captionInterval = 250;
 
-export function useManualCaptions(room, { enabled, hostIdentity, hostVersion = 0, online, microphone }) {
+export function useManualCaptions(room, { enabled, hostIdentity, hostVersion = 0, online, microphone, onCaption }) {
   const [entries, setEntries] = useState([]);
   const [current, setCurrent] = useState(null);
   const [visible, setVisible] = useState(true);
@@ -39,6 +39,7 @@ export function useManualCaptions(room, { enabled, hostIdentity, hostVersion = 0
       lastCaption.current = now;
     }
     const entry = { line, speaker, at: Date.now(), id: crypto.randomUUID() };
+    onCaption?.(entry);
     setCurrent(entry);
     setEntries(previous => [...previous.slice(-999), entry]);
   }
@@ -195,7 +196,7 @@ const formatTime = value => new Date(value).toLocaleTimeString([], {
   hour: '2-digit', minute: '2-digit', second: '2-digit',
 });
 
-export function CaptionsPanel({ captions, host, online, meetingId }) {
+export function CaptionsPanel({ captions, host, online, meetingId, openRecap }) {
   const { automatic, translation } = captions;
   const [draft, setDraft] = useState('');
   const [pending, setPending] = useState(false);
@@ -264,14 +265,17 @@ export function CaptionsPanel({ captions, host, online, meetingId }) {
       {host && <button type="button" className="button" disabled={!online || automatic.pending} onClick={automatic.toggleMeeting}>
         {automatic.active ? 'Turn off automatic captions' : 'Turn on automatic captions'}</button>}
       {automatic.active && <>
-        <p className="muted">English speech recognition runs on each participating Windows device. Recognized text is shared with this meeting.</p>
+        <p className="muted">English speech recognition runs on each participating Windows device. Other attendees can save or summarize the shared captions on their devices.</p>
         {automatic.available && <button type="button" className="button" onClick={automatic.toggleMicrophone}>
           {automatic.subscribed ? 'Stop captioning my microphone' : 'Caption my microphone'}</button>}
-        {automatic.subscribed && <p role="status">{automatic.listening ? 'Captioning your microphone.' : 'Microphone captions are ready when your microphone is on.'}</p>}
+        {automatic.subscribed && <p role="status">{automatic.listening ? 'Sharing captions from your microphone.' : 'Microphone captions are ready when your microphone is on.'}</p>}
         {!automatic.available && <p className="muted">You can read captions here. Captioning your own microphone requires Meetrix for Windows with speech recognition installed.</p>}
       </>}
       {automatic.notice && <p role="status">{automatic.notice}</p>}
     </section>
-    {captions.entries.length > 0 && <button className="button" onClick={save}>Save caption history</button>}
+    <div className="meeting-tool-actions">
+      {captions.entries.length > 0 && <button className="button" onClick={save}>Save caption history</button>}
+      <button className="button" onClick={openRecap}>Meeting recap</button>
+    </div>
   </div>;
 }

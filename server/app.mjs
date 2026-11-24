@@ -11,6 +11,7 @@ import { authenticationScope, createInsforgeAuth, insforgeSettings } from './aut
 import { openDatabase } from './db.mjs';
 import { createDesktopAuth } from './desktop-auth.mjs';
 import { registerTeamChat } from './team-chat.mjs';
+import { googleCalendarRoutes } from './google-calendar.mjs';
 import { calendarFeedRoutes } from './calendar-feed.mjs';
 import { bookingRoutes } from './bookings.mjs';
 import { registerPersonalWorkspace } from './personal-workspace.mjs';
@@ -117,7 +118,7 @@ function view(meeting, userId) {
 }
 
 export function createApp(options, dependencies = {}) {
-  const { origin, livekitUrl, livekitKey, livekitSecret, cloudRecording,
+  const { origin, livekitUrl, livekitKey, livekitSecret, cloudRecording, googleCalendar,
     databasePath, assets, trustProxyHops = 0, dev = false, desktop = false } = options;
   const db = dependencies.db ?? openDatabase(databasePath);
   const breakouts = breakoutStore(db);
@@ -131,7 +132,7 @@ export function createApp(options, dependencies = {}) {
     ? dependencies.egress ?? new EgressClient(livekitUrl.replace(/^ws/, 'http'), livekitKey, livekitSecret, { requestTimeout: 15 })
     : null;
   const cloudStorage = egress ? dependencies.cloudStorage ?? recordingStorage(cloudRecording) : null;
-  const publicConfig = { authProvider: 'insforge', desktop, desktopBrowserSignIn: true, mediaReady: Boolean(rooms), cloudRecording: Boolean(egress) };
+  const publicConfig = { authProvider: 'insforge', desktop, desktopBrowserSignIn: true, mediaReady: Boolean(rooms), cloudRecording: Boolean(egress), googleCalendar: Boolean(googleCalendar) };
   const mediaOrigin = livekitUrl ? new URL(livekitUrl).origin : null;
   const localLoopback = new URL(origin).protocol === 'http:';
   const api = express.Router();
@@ -215,6 +216,9 @@ export function createApp(options, dependencies = {}) {
   bookings.public(api);
   const calendarFeed = calendarFeedRoutes(db, origin, limitOptions);
   calendarFeed.public(api);
+  const google = googleCalendarRoutes({ db, origin, settings: googleCalendar, limits: limitOptions, serial, scheduledTime,
+    request: dependencies.googleCalendarRequest, error: (status, message) => new RequestError(status, message) });
+  google?.public(api);
   const desktopAuth = createDesktopAuth({ db, origin, scope, limitOptions });
   const auth = createInsforgeAuth({ db, origin, ...settings, sessions: desktopAuth, limitOptions, createAuth: dependencies.createAuth });
   const authenticate = dependencies.authenticate ?? auth.currentIdentity;
@@ -294,6 +298,7 @@ export function createApp(options, dependencies = {}) {
   registerTeamChat(api, db, byIdentity);
   bookings.owner(api, byIdentity);
   calendarFeed.owner(api, byIdentity);
+  google?.authenticated(api, byIdentity);
 
   function meetingFor(req) {
     if (!/^[A-Za-z0-9_-]{16}$/.test(req.params.id)) throw new RequestError(404, 'Meeting not found.');

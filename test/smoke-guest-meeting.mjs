@@ -365,6 +365,16 @@ try {
   await guest.locator('.stat-sample').filter({ hasText: 'Shared audio' }).waitFor({ state: 'detached' });
   await host.waitForFunction(() => window.testShareTrack.readyState === 'ended' && window.testShareAudio.readyState === 'ended');
   await host.evaluate(() => window.testAudioContext.close());
+  await host.getByRole('button', { name: 'Share', exact: true }).click();
+  await host.getByRole('button', { name: 'Share audio only' }).click();
+  await host.getByRole('button', { name: 'Stop audio share' }).waitFor();
+  await guest.locator('.stat-sample').filter({ hasText: 'Shared audio' }).getByText(/[1-9]\d* kb\/s/).waitFor();
+  assert.equal(await guest.locator('.share video').count(), 0);
+  assert.equal(await host.evaluate(() => window.testShareTrack.readyState), 'ended');
+  await host.getByRole('button', { name: 'Stop audio share' }).click();
+  await guest.locator('.stat-sample').filter({ hasText: 'Shared audio' }).waitFor({ state: 'detached' });
+  await host.waitForFunction(() => window.testShareAudio.readyState === 'ended');
+  await host.evaluate(() => window.testAudioContext.close());
   await guest.getByRole('button', { name: 'Close panel' }).click();
 
   await host.getByRole('button', { name: 'Devices', exact: true }).click();

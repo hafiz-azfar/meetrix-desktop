@@ -12,7 +12,7 @@ const defaults = {
   confirmLeave: false, pauseIncomingCameras: false, shareFps: 0, shareHint: '', shareLayout: 'stacked',
   chatSize: 'standard', announceMessages: true, reducedMotion: false,
   captionSize: 'standard', captionContrast: 'standard',
-  shortcutsEnabled: true, shortcuts: defaultShortcuts,
+  shortcutsEnabled: true, shortcuts: defaultShortcuts, pushToTalk: '',
 };
 const fields = [
   { key: 'microphone', kind: 'audioinput', label: 'Microphone', Icon: Mic },

@@ -61,6 +61,10 @@
 | F20-H1 | Tasks and Canvas persist with account isolation and optimistic concurrency checks | API and workspace browser smoke tests |
 | F20-H2 | A local clip is recorded, played after reload, exported as WebM and deleted, and the selected track is released when recording stops | Workspace browser smoke test with synthetic display source |
 | F20-H3 | Guests make a reservation and receive a meeting link. Competing requests cannot claim the same slot | API and workspace browser smoke tests |
+| F15-H2 | Locally collected captions become an editable recap after leaving. Long transcripts stay in order across model sections | Workspace browser and recap unit tests |
+| F16-H2 | OAuth state and PKCE bind a Google account to the organizer, and a linked event can be pushed or pulled with conflict checking | Google Calendar API contract test with fixtures |
+| F23-H5 | Push-to-talk publishes a microphone only while held and releases on keyup and blur | Workspace browser smoke with fake media |
+| F30-H2 | Audio-only sharing transmits an audible track with no screen video, then releases the captured source | Four-client LiveKit and native Windows capture smoke tests |
 | F12-P1 | 100-person load, 30-hour duration, and production availability | Deployment-scale verification |
 
 Run `npm test` for the API suite. The RTC tests use two isolated browser pages and a real loopback LiveKit server. The desktop test is aimed at the Windows development build.

@@ -92,6 +92,24 @@ export function openDatabase(filename) {
       notes_version INTEGER NOT NULL DEFAULT 0
     ) STRICT;
     CREATE INDEX IF NOT EXISTS meetings_by_owner ON meetings(owner, start_at);
+    CREATE TABLE IF NOT EXISTS google_calendar_flows (
+      state TEXT PRIMARY KEY,
+      nonce TEXT NOT NULL UNIQUE,
+      owner TEXT NOT NULL,
+      verifier TEXT NOT NULL,
+      expires_at INTEGER NOT NULL,
+      code TEXT
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS google_calendar_flows_expiry ON google_calendar_flows(expires_at);
+    CREATE TABLE IF NOT EXISTS google_calendar_connections (
+      owner TEXT PRIMARY KEY,
+      refresh_token TEXT NOT NULL
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS google_calendar_events (
+      meeting TEXT PRIMARY KEY REFERENCES meetings(id),
+      event TEXT NOT NULL,
+      etag TEXT NOT NULL
+    ) STRICT;
     CREATE TABLE IF NOT EXISTS calendar_feeds (
       owner TEXT PRIMARY KEY,
       token_hash TEXT NOT NULL UNIQUE

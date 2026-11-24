@@ -277,7 +277,12 @@ function ShortcutSettings({ prefs, updatePrefs }) {
     <div className="settings-card">
       <label className="check"><input type="checkbox" checked={prefs.shortcutsEnabled}
         onChange={event => updatePrefs({ shortcutsEnabled: event.target.checked })} /> Enable meeting shortcuts</label>
-      <p className="muted">Use Alt + Shift with the assigned key while the meeting window is focused.</p>
+      <label className="default-view">Push-to-talk key
+        <select value={prefs.pushToTalk} onChange={event => updatePrefs({ pushToTalk: event.target.value })}>
+          <option value="">Off</option><option value="Space">Space</option><option value="Backquote">Backtick</option><option value="F8">F8</option>
+        </select>
+      </label>
+      <p className="muted">Hold the selected key while muted to talk. Use Alt + Shift for the other meeting shortcuts.</p>
       <div className="preference-list">
         {meetingShortcuts.map(({ id, label }) => <label className="default-view" key={id}>{label}
           <select aria-label={label} value={prefs.shortcuts[id]} disabled={!prefs.shortcutsEnabled}

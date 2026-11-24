@@ -10,6 +10,8 @@ import {
   Gauge, Hourglass, Maximize, PanelsTopLeft, PenTool, PhoneOff, Send, Settings2, ShieldCheck, ShieldMinus, ShieldPlus, SlidersHorizontal, UserMinus, Users, Video, VideoOff, X,
 } from 'lucide-react';
 import { invitation } from './api.js';
+import { MeetingRecap } from './meeting-recap.jsx';
+import { useMeetingRecap } from './meeting-recap.js';
 import { Notes } from './notes.jsx';
 import { Polls } from './polls.jsx';
 import { Whiteboard } from './whiteboard.jsx';
@@ -18,6 +20,7 @@ import { captureOptions, DeviceFields, microphoneOptions, SpeakerVolume } from '
 import { applyCameraBackground, CameraBackgroundFields } from './camera-background.jsx';
 import { CallViewOptions } from './settings.jsx';
 import { CallStatistics } from './call-statistics.jsx';
+import { usePushToTalk } from './push-to-talk.js';
 import { shortcutFor } from './shortcuts.js';
 import { BreakoutCountdown, BreakoutRooms, ChooseBreakoutRoom } from './breakout-rooms.jsx';
 import { CaptionsOverlay, CaptionsPanel, useManualCaptions } from './meeting-captions.jsx';
@@ -35,7 +38,7 @@ const decoder = new TextDecoder();
 const reactions = ['👍', '👏', '🎉', '❤️'];
 const panelTitles = {
   people: 'Participants', chat: 'Meeting chat', polls: 'Polls', board: 'Whiteboard', notes: 'Notes',
-  quality: 'Call statistics', breakouts: 'Breakout rooms', captions: 'Live captions', recording: 'Local recording',
+  quality: 'Call statistics', breakouts: 'Breakout rooms', captions: 'Live captions', recap: 'Meeting recap', recording: 'Local recording',
 };
 
 function initials(name) {
@@ -44,6 +47,23 @@ function initials(name) {
 
 export function Conference({ session, api, prefs, updatePrefs, onLeave }) {
   const placement = useRoomPlacement(api, session);
+  const recap = useMeetingRecap();
+  const [review, setReview] = useState(false);
+  const finishAfterEnd = useEffectEvent(() => {
+    if (recap.finish()) setReview(true);
+  });
+  useEffect(() => { if (placement.ended) finishAfterEnd(); }, [placement.ended]);
+  function leave() {
+    if (recap.finish()) setReview(true);
+    else onLeave();
+  }
+  if (review) return <main className="boot recap-review"><Logo /><section className="settings-card">
+    <h1>Meeting recap</h1><p>{session.meeting.title}</p>
+    <MeetingRecap recap={recap} review />
+    <button className="button" onClick={() => {
+      if (recap.status !== 'generating' || window.confirm('Leave and cancel this recap?')) onLeave();
+    }}>Return to workspace</button>
+  </section></main>;
   if (placement.ended) return <main className="boot"><Logo />
     <p role="status">You are disconnected from this room.</p>
     <button className="button" onClick={onLeave}>Return to workspace</button>
@@ -51,15 +71,15 @@ export function Conference({ session, api, prefs, updatePrefs, onLeave }) {
   if (placement.waiting) return <main className="boot"><Logo />
     <h1>Waiting room</h1>
     <p role="status">The host moved you to the waiting room.</p>
-    <button className="button" onClick={onLeave}>Leave meeting</button>
+    <button className="button" onClick={leave}>Leave meeting</button>
   </main>;
   return <ConferenceConnection key={placement.session.roomId + ':' + (placement.session.placementEpoch ?? 0)} session={placement.session} api={api}
-    prefs={prefs} updatePrefs={updatePrefs} onLeave={onLeave} roles={placement.roles}
+    prefs={prefs} updatePrefs={updatePrefs} onLeave={leave} recap={recap} roles={placement.roles}
     updateRoles={placement.updateRoles} refreshPlacement={placement.refreshPlacement}
     breakoutChoices={placement.breakoutChoices} breakoutClosesAt={placement.breakoutClosesAt} chooseBreakout={placement.chooseBreakout} />;
 }
 
-function ConferenceConnection({ session, api, prefs, updatePrefs, onLeave, roles, updateRoles, refreshPlacement, breakoutChoices, breakoutClosesAt, chooseBreakout }) {
+function ConferenceConnection({ session, api, prefs, updatePrefs, onLeave, recap, roles, updateRoles, refreshPlacement, breakoutChoices, breakoutClosesAt, chooseBreakout }) {
   const [error, setError] = useState('');
   const [secureRoom, setSecureRoom] = useState(null);
   useEffect(() => {
@@ -77,7 +97,7 @@ function ConferenceConnection({ session, api, prefs, updatePrefs, onLeave, roles
   if (session.meeting.encrypted && !secureRoom) return <main className="boot"><Logo /><p role="status">{error || 'Preparing the encrypted room…'}</p><button className="button" onClick={onLeave}>Return to workspace</button></main>;
   return <LiveKitRoom room={secureRoom || undefined} serverUrl={session.serverUrl} token={session.token} audio={false} video={false}
     options={secureRoom ? undefined : videoOptions} onError={error => setError(error.message || 'Could not connect to the room.')}>
-    <Call session={session} api={api} prefs={prefs} updatePrefs={updatePrefs} onLeave={onLeave}
+    <Call session={session} api={api} prefs={prefs} updatePrefs={updatePrefs} onLeave={onLeave} recap={recap}
       connectionError={error} roles={roles} updateRoles={updateRoles} refreshPlacement={refreshPlacement}
       breakoutChoices={breakoutChoices} breakoutClosesAt={breakoutClosesAt} chooseBreakout={chooseBreakout} />
     <RoomAudioRenderer volume={prefs.speakerVolume} />
@@ -112,7 +132,7 @@ function ElapsedTime({ joinedAt }) {
   return <time title="Time connected" className="call-timer">{hours ? hours + ':' : ''}{minutes}:{seconds}</time>;
 }
 
-function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, roles, updateRoles, refreshPlacement, breakoutChoices, breakoutClosesAt, chooseBreakout }) {
+function Call({ session, api, prefs, updatePrefs, onLeave, recap, connectionError, roles, updateRoles, refreshPlacement, breakoutChoices, breakoutClosesAt, chooseBreakout }) {
   const room = useRoomContext();
   const connection = useConnectionState();
   const { localParticipant, isCameraEnabled, isMicrophoneEnabled, isScreenShareEnabled } = useLocalParticipant();
@@ -130,6 +150,17 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, role
   const [shareOptions, setShareOptions] = useState(false);
   const [shareSound, setShareSound] = useState(false);
   const [sharing, setSharing] = useState(false);
+  const [audioShare, setAudioShare] = useState(false);
+  const audioCapture = useRef(null);
+  const shareMounted = useRef(false);
+  useEffect(() => {
+    shareMounted.current = true;
+    return () => {
+      shareMounted.current = false;
+      audioCapture.current?.stop();
+      audioCapture.current = null;
+    };
+  }, []);
   const [cameraBusy, setCameraBusy] = useState(false);
   const [viewOptions, setViewOptions] = useState(false);
   const [fullscreen, setFullscreen] = useState(Boolean(document.fullscreenElement));
@@ -160,9 +191,12 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, role
   const canModerate = host || coHost;
   const canManageBreakouts = meetingTools && canModerate;
   const canOpenBreakouts = canManageBreakouts || breakoutChoices.length > 0;
+  const pushToTalk = usePushToTalk(room, {
+    key: prefs.pushToTalk, online, deviceId: prefs.microphoneId, reduceNoise: prefs.reduceNoise, onError: setError,
+  });
   const microphoneTrack = isMicrophoneEnabled
     ? localParticipant.getTrackPublication(Track.Source.Microphone)?.track?.mediaStreamTrack : null;
-  const captions = useManualCaptions(room, { enabled: meetingTools, hostIdentity, hostVersion, online, microphone: microphoneTrack });
+  const captions = useManualCaptions(room, { enabled: meetingTools, hostIdentity, hostVersion, online, microphone: microphoneTrack, onCaption: recap.append });
   const recording = useMeetingRecording(room, { enabled: meetingTools, hostIdentity, host, meetingId: id });
   const cloudRecordingEnabled = meetingTools && session.cloudRecording === true;
   const cloudRecording = useCloudRecording({ enabled: cloudRecordingEnabled, meetingId: id, online, api });
@@ -345,7 +379,9 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, role
   }
 
   async function exit(end) {
+    pushToTalk.cancel();
     setExiting(true);
+    await stopAudioShare();
     await recording.finishForExit();
     if (end && !(await moderate({ action: 'end' }))) { setExiting(false); return; }
     await room.disconnect().catch(() => {});
@@ -378,6 +414,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, role
   function toggleLayout() { setLayout(previous => previous === 'grid' ? 'speaker' : 'grid'); }
 
   function toggleMicrophone() {
+    if (pushToTalk.busy()) { pushToTalk.cancel(); return; }
     setMicrophoneRequest(false);
     return run(() => localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled, microphoneOptions(prefs)));
   }
@@ -427,8 +464,43 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, role
     });
   }
 
-  async function startShare() {
-    if (!online || sharing || isScreenShareEnabled) return;
+  async function stopAudioShare(track = audioCapture.current) {
+    if (!track || track !== audioCapture.current) return;
+    audioCapture.current = null;
+    track.stop();
+    setAudioShare(false);
+    await localParticipant.unpublishTrack(track, true).catch(() => {});
+  }
+
+  async function shareAudioOnly() {
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: true,
+      audio: { restrictOwnAudio: true, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      systemAudio: 'include', selfBrowserSurface: 'exclude',
+    });
+    const [track, ...extra] = stream.getAudioTracks();
+    [...stream.getVideoTracks(), ...extra].forEach(source => source.stop());
+    if (!track || track.readyState !== 'live' || !shareMounted.current || room.state !== ConnectionState.Connected) {
+      stream.getTracks().forEach(source => source.stop());
+      throw new Error('The selected source did not provide shareable audio.');
+    }
+    audioCapture.current = track;
+    track.addEventListener('ended', () => { void stopAudioShare(track); }, { once: true });
+    try {
+      await localParticipant.publishTrack(track, { source: Track.Source.ScreenShareAudio });
+      if (audioCapture.current !== track || track.readyState !== 'live') {
+        throw new Error('The selected audio source stopped.');
+      }
+      setAudioShare(true);
+    } catch (error) {
+      if (audioCapture.current === track) await stopAudioShare(track);
+      else await localParticipant.unpublishTrack(track, true).catch(() => {});
+      throw error;
+    }
+  }
+
+  async function startShare(soundOnly = false) {
+    if (!online || sharing || isScreenShareEnabled || audioCapture.current) return;
     setShareOptions(false);
     setSharing(true);
     const preset = ScreenSharePresets.h1080fps15;
@@ -438,6 +510,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, role
       : undefined;
     try {
       await run(async () => {
+        if (soundOnly) { await shareAudioOnly(); return; }
         await localParticipant.setScreenShareEnabled(true, {
           audio: shareSound ? { restrictOwnAudio: true, echoCancellation: false, noiseSuppression: false, autoGainControl: false } : false,
           systemAudio: shareSound ? 'include' : 'exclude', selfBrowserSurface: 'exclude',
@@ -450,6 +523,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, role
   }
 
   function toggleShare() {
+    if (audioCapture.current) return stopAudioShare();
     if (isScreenShareEnabled) return run(() => localParticipant.setScreenShareEnabled(false));
     setShareSound(false);
     setShareOptions(true);
@@ -515,6 +589,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, role
       <span>{error || connectionError || (ended ? 'You are disconnected from this room.' : toast)}</span>
       {(error || toast) && <button className="icon-button" aria-label="Dismiss notice" onClick={() => { setError(''); setToast(''); }}><X size={17} /></button>}
     </div>}
+    {pushToTalk.status && <div className="call-notice" role="status">{pushToTalk.status}</div>}
     {online && microphoneRequest && !isMicrophoneEnabled && <div className="call-notice" role="status">
       <span>A moderator asked you to turn on your microphone.</span>
       <div className="meeting-tool-actions"><button className="button primary small" onClick={toggleMicrophone}>Turn on microphone</button>
@@ -591,7 +666,9 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, role
         {panel === 'polls' && <Polls api={api} id={id} host={host} />}
         {panel === 'board' && <Whiteboard api={api} id={id} host={host} />}
         {panel === 'quality' && <CallStatistics room={room} online={online} />}
-        {panel === 'captions' && <CaptionsPanel captions={captions} host={host} online={online} meetingId={id} />}
+        {panel === 'captions' && <CaptionsPanel captions={captions} host={host} online={online} meetingId={id}
+          openRecap={() => setPanel('recap')} />}
+        {panel === 'recap' && meetingTools && <MeetingRecap recap={recap} online={online} />}
         {panel === 'recording' && host && <>
           <RecordingPanel recording={recording} participants={participants} online={online} />
           {cloudRecordingEnabled && <CloudRecordingPanel recording={cloudRecording} online={online} />}
@@ -607,7 +684,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, role
       <StartAudio label="Enable audio" className="button" />
       <button className="call-control" disabled={!online} aria-pressed={isMicrophoneEnabled} onClick={toggleMicrophone}>{isMicrophoneEnabled ? <Mic size={20} /> : <MicOff size={20} />}<span>{isMicrophoneEnabled ? 'Mute' : 'Unmute'}</span></button>
       <button className="call-control" disabled={!online || cameraBusy} aria-pressed={isCameraEnabled} onClick={toggleCamera}>{isCameraEnabled ? <Video size={20} /> : <VideoOff size={20} />}<span>Camera</span></button>
-      <button className="call-control" disabled={!online || sharing} aria-pressed={isScreenShareEnabled} onClick={toggleShare}><MonitorUp size={20} /><span>{isScreenShareEnabled ? 'Stop share' : 'Share'}</span></button>
+      <button className="call-control" disabled={!online || sharing} aria-pressed={isScreenShareEnabled || audioShare} onClick={toggleShare}><MonitorUp size={20} /><span>{audioShare ? 'Stop audio share' : isScreenShareEnabled ? 'Stop share' : 'Share'}</span></button>
       <button className="call-control" aria-pressed={panel === 'people'} onClick={() => togglePanel('people')}><Users size={20} /><span>People {participants.length + (canModerate ? guests.length : 0)}</span></button>
       <button className="call-control" aria-pressed={panel === 'chat'} onClick={() => togglePanel('chat')}><MessageSquare size={20} /><span>Chat</span></button>
       {meetingTools && <button className="call-control" aria-pressed={panel === 'captions'} onClick={() => togglePanel('captions')}><Captions size={20} /><span>{captions.automatic.active ? 'Captions on' : 'Captions'}</span></button>}
@@ -637,7 +714,8 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, role
           ? 'Choose a display to share its picture and system audio, including sounds from other apps.'
           : 'Your browser decides which screens or tabs can share audio.'}</small></span></label>
       <div className="dialog-actions"><button className="button" onClick={() => setShareOptions(false)}>Cancel</button>
-        <button className="button primary" disabled={!online} onClick={startShare}>Choose source</button></div>
+        <button className="button" disabled={!online} onClick={() => startShare(true)}>Share audio only</button>
+        <button className="button primary" disabled={!online} onClick={() => startShare()}>Choose source</button></div>
     </Dialog>}
     {viewOptions && <Dialog title="View preferences" close={() => setViewOptions(false)}>
       <CallViewOptions prefs={prefs} updatePrefs={updatePrefs} />

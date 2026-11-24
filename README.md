@@ -19,7 +19,7 @@ npm ci
 npm run dist
 ```
 
-The installer is written to `release/Meetrix-InsForge-Setup-0.1.15-x64.exe`. To preconfigure the installer with a project, copy `.env.example` to `.env`, fill the InsForge settings, and run `npm run dist:local`. If your project requires an anon key, use its public anon key. Installer and executable signing are left to the distributor. Builds fetch the pinned caption models once and cache them in `vendor/caption-models`.
+The installer is written to `release/Meetrix-InsForge-Setup-0.1.16-x64.exe`. To preconfigure the installer with a project, copy `.env.example` to `.env`, fill the InsForge settings, and run `npm run dist:local`. If your project requires an anon key, use its public anon key. Installer and executable signing are left to the distributor. Builds fetch the pinned caption models once and cache them in `vendor/caption-models`.
 
 ## Host a workspace
 
@@ -37,6 +37,12 @@ Deploy LiveKit Egress with access to the WSS server and the workspace HTTPS orig
 
 In a standard, signed-in-only meeting, the host can request cloud recording under **Record**. Each connected attendee must consent. A job covers up to 30 participants for 30 minutes and stops if the approved roster changes. The requesting host can download the private MP4 from **Meetings → Cloud recordings**. Cloud recording requires the hosted service. The bundled local Windows workspace supports local WebM recording.
 
+### Google Calendar for hosted workspaces
+
+Enable the Google Calendar API and register a Google web OAuth client. Use the exact hosted HTTPS callback `/api/google-calendar/callback`. Set the three `MEETRIX_GOOGLE_CALENDAR_*` variables in `.env.example` on the server. The encryption key must be 32 random bytes encoded as base64url. Keep these values and callback query strings out of logs and client bundles. The workspace requests access to events on calendars the user owns. [Google OAuth setup](https://developers.google.com/identity/protocols/oauth2/web-server) · [Calendar scopes](https://developers.google.com/workspace/calendar/api/auth)
+
+Connect in a browser from **Meetings → Google Calendar**, then open an unopened meeting’s management menu. Publish and push selected meetings to the connected account’s primary calendar, or pull a changed title and time into Meetrix. Meetrix checks Google’s event version before writing. Linked events and provider edits are synchronized on request.
+
 ## Meeting features
 
 - Schedule one-time, daily, weekday, weekly, or monthly meetings. Daily, weekly, and monthly schedules support custom repeat intervals. A series can contain up to 52 occurrences within the next year. Preview the dates before saving, then download a single occurrence or the whole new series as an iCalendar file for Google Calendar, Outlook, or Apple Calendar.
@@ -44,11 +50,12 @@ In a standard, signed-in-only meeting, the host can request cloud recording unde
 - Microphone, camera, and speaker selection before joining or from **Devices** during a call. Browser support determines speaker availability.
 - **Settings** includes a live microphone meter, a speaker test tone, noise reduction, camera preview and mirroring, and saved defaults for joining a call. Preview and diagnostic media stays on your device.
 - Use **Camera background** in Video settings, the pre-join setup, or a meeting’s **Devices** dialog. Choose blur or a JPEG, PNG, or WebP image from your device. The app saves your selection on this device. The bundled model applies the effect locally before Meetrix publishes your camera.
+- Use **Push-to-talk key** under **Keyboard shortcuts** to temporarily open a muted microphone with Space, Backtick, or F8 while the meeting window is focused.
 - Appearance, in-app shortcut assignments, chat accessibility, caption size and contrast, and presentation preferences are saved on your device. From a call, **View preferences** can pause incoming cameras while preserving audio and presentations. **Call statistics** displays sampled WebRTC media measurements and exports a local JSON snapshot of the displayed metrics.
 - Host moderation, passcodes, room locks, waiting rooms, and participant removal.
 - In standard meetings, hosts and co-hosts can move an attendee back to the waiting room from **People** or **Breakouts**. Readmitted attendees return to the main room with their camera and microphone off.
 - In standard meetings, open **People** and select **Transfer host** on a connected, signed-in attendee. The meeting continues under the new host, and the original organizer can stay or leave.
-- Turn on **Include sound** in the **Share** dialog to send sound with a display. The Windows app captures system audio with an explicitly selected display. A browser’s source picker determines which other sources provide audio.
+- Turn on **Include sound** in the **Share** dialog to send sound with a display, or choose **Share audio only** to send only the selected source’s audio. The Windows app captures system audio with an explicitly selected display. A browser’s source picker determines which other sources provide audio.
 - Presenters can use **Annotate** to draw freehand, add lines, arrows, rectangles, ellipses and short labels, let attendees draw, and clear the marks. **Save annotated image** saves a PNG of the current shared frame and visible annotations to the presenter’s device. A presentation’s annotations stay in its LiveKit room and end with that share.
 - In a standard meeting, hosts can open **People** and make a connected, signed-in attendee a co-host. Co-hosts can manage the waiting room, lock the room, moderate attendees, and manage breakouts. Hosts can revoke co-host access from the same panel. **Mute attendees** mutes active attendee microphones in the main room. Moderators can stop an attendee’s camera or ask an attendee to turn on their microphone. The attendee chooses whether to unmute.
 - Hosts can allow invitees without accounts. The waiting room still applies, and the host sees those invitees labeled as unverified guests.
@@ -69,6 +76,7 @@ In a standard, signed-in-only meeting, the host can request cloud recording unde
 - **Clips** records a selected screen or window, with optional microphone audio. A clip lasts up to two minutes and can be played or downloaded as WebM from the local device library.
 - **Bookings** publishes available meeting slots. An invitee claims a slot and receives a meeting link and calendar invitation. The host admits them from the waiting room. Public links require a reachable hosted workspace.
 - **Calendar subscription** publishes upcoming meetings you organize through a private, revocable link in a hosted HTTPS workspace. Add the URL to a calendar app that supports internet subscriptions. The calendar app controls refresh timing. [Google Calendar](https://support.google.com/calendar/answer/37100) · [Outlook](https://support.microsoft.com/en-us/outlook/add-a-calendar-in-outlook-com-or-outlook-on-the-web) · [Apple Calendar](https://support.apple.com/guide/calendar/subscribe-to-calendars-icl1022/mac)
+- From **Captions**, choose **Start collecting captions** to build a private recap from the shared captions received while you attend. Meetrix drafts it on this device when you leave, or when you select **Draft recap now**. You can review and export the draft.
 - **AI meeting summary** in **Notes** drafts a summary of up to 2,400 characters of English notes or recent captions using a bundled on-device model. You can review, edit, and download the draft.
 
 ## Verification

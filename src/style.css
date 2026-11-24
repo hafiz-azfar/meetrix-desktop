@@ -138,6 +138,9 @@
   .booking-card .button { text-decoration: none; }
   .canvas-preview { min-height: 9rem; overflow-wrap: anywhere; padding: .75rem; border: 1px solid var(--line); border-radius: var(--radius); }
   .canvas-preview p { white-space: pre-wrap; margin: .3rem 0; }
+  .recap-review .settings-card { max-width: 44rem; width: min(100%, 44rem); text-align: left; }
+  .call-side .summary-panel { padding: 0 0.9rem 0.9rem; }
+  .recap-review .summary-panel { margin-bottom: 1rem; }
   .summary-panel > label { display: grid; gap: .3rem; margin: .75rem 0; }
   .summary-panel textarea { width: 100%; resize: vertical; }
   .meeting-row { display: flex; align-items: center; gap: 12px; min-height: 69px; padding: 9px 16px; }
