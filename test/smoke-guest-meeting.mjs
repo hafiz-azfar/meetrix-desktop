@@ -736,9 +736,13 @@ try {
   await delegate.getByLabel('Passcode (if required)', { exact: true }).fill('test passcode');
   await delegate.getByRole('button', { name: 'Continue', exact: true }).click();
   await delegate.getByRole('button', { name: 'Join now' }).click();
+  await delegate.getByText('Connected', { exact: true }).waitFor();
   await host.getByRole('button', { name: 'People 4', exact: true }).waitFor();
+  const assigned = host.waitForResponse(response => response.url().endsWith('/moderate') && response.request().method() === 'POST');
   host.once('dialog', dialog => dialog.accept());
   await host.getByRole('button', { name: 'Make co-host: Design partner', exact: true }).click();
+  const assignment = await assigned;
+  assert.equal(assignment.status(), 200, await assignment.text());
   await roleStatus.waitFor();
   await host.getByRole('button', { name: 'Leave', exact: true }).click();
   await host.getByRole('button', { name: 'Leave room', exact: true }).click();
