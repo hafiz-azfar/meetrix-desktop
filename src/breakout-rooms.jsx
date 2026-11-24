@@ -31,6 +31,7 @@ export function BreakoutRooms({ api, meetingId, participants, moveToWaitingRoom,
   const [announcement, setAnnouncement] = useState('');
   const [notice, setNotice] = useState('');
   const [retry, setRetry] = useState(0);
+  const [plan, setPlan] = useState(null);
   const path = '/meetings/' + meetingId + '/breakouts';
   const attendees = participants.filter(participant => !participant.isLocal && participant.identity);
 
@@ -45,6 +46,7 @@ export function BreakoutRooms({ api, meetingId, participants, moveToWaitingRoom,
         setActive(result.rooms);
         setClosesAt(result.closesAt);
         setOpenSelection(result.selfSelect === true);
+        setPlan(result.plan ?? null);
       } catch (failure) {
         if (!controller.signal.aborted) setError(failure.message);
       } finally {
@@ -141,6 +143,13 @@ export function BreakoutRooms({ api, meetingId, participants, moveToWaitingRoom,
         name, members: attendees.filter(person => assignments[person.identity] === index).map(person => person.identity),
       })) });
     }}>
+      {plan && <div><button type="button" className="button small" disabled={pending} onClick={() => {
+        setNames(plan.names);
+        setAssignments({});
+        setSelfSelect(plan.selfSelect);
+        setDuration(plan.durationMinutes ? String(plan.durationMinutes) : '');
+        setNotice('Scheduled breakout plan loaded.');
+      }}>Load scheduled plan</button></div>}
       <div className="breakout-fields">
         {names.map((name, index) => <div className="breakout-name" key={index}>
           <input aria-label={'Name for breakout room ' + (index + 1)} value={name} maxLength={40} required disabled={pending}

@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Accessibility, AudioLines, Keyboard, Mic, MonitorUp, Palette, SlidersHorizontal, Video, Volume2 } from 'lucide-react';
 import { CameraPreview, DeviceFields, microphoneOptions, SpeakerVolume } from './media-devices.jsx';
 import { CameraBackgroundFields } from './camera-background.jsx';
+import { MicrophonePlayback } from './microphone-playback.jsx';
 import { defaultShortcuts, meetingShortcuts } from './shortcuts.js';
 
 const sections = [
@@ -183,6 +184,7 @@ function AudioSettings({ prefs, updatePrefs }) {
     <div className="device-checks">
       <MicrophoneCheck prefs={prefs} />
       <SpeakerCheck prefs={prefs} />
+      <MicrophonePlayback key={prefs.microphoneId + ':' + prefs.reduceNoise} prefs={prefs} />
     </div>
   </>;
 }

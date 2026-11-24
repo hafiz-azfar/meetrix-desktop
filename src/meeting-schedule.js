@@ -3,6 +3,26 @@ const dayMs = 86_400_000;
 export const maxOccurrences = 52;
 export const maxRepeatInterval = 12;
 
+export function localDateValue(time) {
+  const date = new Date(time);
+  return new Date(time - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
+
+export function shiftMeetingTimes(meetings, firstLocalTime) {
+  const first = Date.parse(firstLocalTime + ':00Z');
+  if (!meetings.length || !Number.isFinite(first)) throw new Error('Choose a start time for the first selected occurrence.');
+  const anchor = Date.parse(localDateValue(meetings[0].startAt) + ':00Z');
+  const delta = first - anchor;
+  return meetings.map(meeting => {
+    if (!delta) return new Date(meeting.startAt);
+    const date = new Date(meeting.startAt);
+    const wall = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate(), date.getHours(),
+      date.getMinutes(), date.getSeconds(), date.getMilliseconds()) + delta);
+    return new Date(wall.getUTCFullYear(), wall.getUTCMonth(), wall.getUTCDate(), wall.getUTCHours(),
+      wall.getUTCMinutes(), wall.getUTCSeconds(), wall.getUTCMilliseconds());
+  });
+}
+
 export function meetingOccurrences(value, frequency = 'once', count = 1, now = Date.now(), interval = 1, options = {}) {
   const fields = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(value);
   if (!fields) throw new Error('Choose a meeting date and start time.');

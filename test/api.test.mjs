@@ -138,6 +138,68 @@ test('weekly occurrences are created together and only the host can reschedule a
   assert.equal((await api('/meetings')).json.length, 54);
 });
 
+test('series edits preserve invite IDs and use optimistic concurrency for unopened occurrences', async t => {
+  const { api, create, connect } = await fixture(t);
+  const start = Date.now() + 86400000;
+  const date = index => new Date(start + index * 86400000).toISOString();
+  const created = await create({ startAt: date(0), additionalStarts: [date(1), date(2), date(3)] });
+  assert.equal(created.status, 201);
+  const [first, second, third, fourth] = created.json.scheduledMeetings;
+  assert.deepEqual(created.json.scheduledMeetings.map(item => item.seriesIndex), [0, 1, 2, 3]);
+  const path = '/meetings/' + second.id + '/series';
+  const load = async () => (await api(path)).json;
+  const edit = body => api(path, { method: 'PATCH', body });
+  assert.equal((await api(path, { token: 'guest' })).status, 404);
+  const before = await load();
+  assert.equal(before.meetings.length, 4);
+  assert.equal((await connect(first.id, 'owner')).status, 200);
+  assert.equal((await edit({ action: 'cancel', scope: 'upcoming', revision: before.revision })).status, 409);
+  const current = await load();
+  const updated = await edit({ action: 'reschedule', scope: 'following', revision: current.revision,
+    title: 'Revised check-in', duration: 45, startTimes: [1, 2, 3].map(index => new Date(Date.parse(date(index)) + 3600000).toISOString()) });
+  assert.equal(updated.status, 200);
+  assert.deepEqual(updated.json.meetings.map(item => [item.id, item.title, item.duration, item.sequence]),
+    [second, third, fourth].map(item => [item.id, 'Revised check-in', 45, 1]));
+  const snapshot = await load();
+  assert.equal((await edit({ action: 'reschedule', scope: 'upcoming', revision: snapshot.revision,
+    title: 'Colliding dates', duration: 30, startTimes: [date(2), date(2), date(3)] })).status, 400);
+  assert.equal((await load()).revision, snapshot.revision);
+  assert.equal((await edit({ action: 'cancel', scope: 'upcoming', revision: snapshot.revision })).json.updated, 3);
+  for (const item of [second, third, fourth]) assert.equal((await connect(item.id, 'guest')).status, 410);
+  const existing = (await api('/meetings')).json.find(item => item.id === first.id);
+  assert.equal(existing.title, 'Roadmap');
+  assert.equal(existing.stoppedAt, null);
+  assert.equal(existing.sequence, 0);
+});
+
+test('scheduled breakout plans are private and load after starting a standard meeting', async t => {
+  const { api, create, connect } = await fixture(t);
+  const meeting = (await create({})).json;
+  const uri = '/meetings/' + meeting.id;
+  const plan = { names: ['Research', 'Design'], selfSelect: true, durationMinutes: 10 };
+  const save = (value, token = 'owner') => api(uri + '/breakout-plan', { method: 'PATCH', token, body: { plan: value } });
+  assert.equal((await api(uri + '/breakout-plan', { token: 'guest' })).status, 404);
+  assert.equal((await save(plan, 'guest')).status, 404);
+  assert.equal((await save({ ...plan, names: ['Design', ' design '] })).status, 400);
+  assert.deepEqual((await save(plan)).json.plan, plan);
+  assert.deepEqual((await api(uri + '/breakout-plan')).json.plan, plan);
+  assert.equal((await save(null)).json.plan, null);
+  await save(plan);
+  assert.equal((await connect(meeting.id, 'owner')).status, 200);
+  assert.equal((await save(null)).status, 409);
+  assert.equal((await api(uri + '/breakouts', { token: 'guest' })).status, 403);
+  assert.deepEqual((await api(uri + '/breakouts')).json.plan, plan);
+  const opened = await api(uri + '/breakouts', { method: 'POST', body: {
+    action: 'open', selfSelect: plan.selfSelect, durationSeconds: plan.durationMinutes * 60,
+    rooms: plan.names.map(name => ({ name, members: [] })),
+  } });
+  assert.equal(opened.status, 200);
+  assert.deepEqual(opened.json.rooms.map(room => room.name), plan.names);
+  assert.ok(opened.json.closesAt > Date.now());
+  const encrypted = (await create({ encrypted: true })).json;
+  assert.equal((await api('/meetings/' + encrypted.id + '/breakout-plan', { method: 'PATCH', body: { plan } })).status, 404);
+});
+
 test('personal workspace keeps items private and rejects stale saves and deletes', async t => {
   const { api } = await fixture(t);
   const tasks = '/workspace/tasks';

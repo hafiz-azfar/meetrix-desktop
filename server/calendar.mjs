@@ -33,6 +33,7 @@ export function meetingCalendar(meetings, origin, exportedAt = Date.now()) {
     lines.push(
       'BEGIN:VEVENT',
       'UID:' + textValue(meeting.id + '@' + host),
+      'SEQUENCE:' + (meeting.sequence ?? 0),
       'DTSTAMP:' + stamp(exportedAt),
       'DTSTART:' + stamp(meeting.startAt),
       'DTEND:' + stamp(Number(meeting.startAt) + meeting.duration * 60000),

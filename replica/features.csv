@@ -35,3 +35,6 @@ F33,Meetings,Connection statistics and diagnostics,should,yes,yes,Local WebRTC m
 F34,Desktop,Tray and scheduled reminders,should,yes,partial,Optional minimize to notification area with generic reminders while the app is running
 F35,Meetings,Custom recurring meeting patterns,should,yes,partial,Selected weekdays and monthly weekday patterns plus an end date within one year and up to 52 occurrences
 F36,Desktop,Accent themes,should,yes,yes,Four accessible color accents in light dark and system modes
+F37,Meetings,Edit and cancel recurring meeting occurrences,should,yes,partial,Apply changes to all upcoming occurrences or from the selected occurrence onward with stable invite links
+F38,Pro,Scheduled breakout room plans,should,yes,partial,Save room names and timing before the call and assign participants once admitted
+F39,Desktop,Microphone recording and playback,should,yes,yes,Replay a short local microphone sample in Audio settings

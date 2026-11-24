@@ -15,7 +15,7 @@ export function googleCalendarRoutes({ db, origin, settings, limits, error, seri
   const find = db.prepare('SELECT * FROM meetings WHERE id = ? AND owner = ?');
   const link = db.prepare('SELECT event, etag FROM google_calendar_events WHERE meeting = ?');
   const save = db.prepare('INSERT INTO google_calendar_events(meeting, event, etag) VALUES(?, ?, ?) ON CONFLICT(meeting) DO UPDATE SET etag=excluded.etag');
-  const revise = db.prepare('UPDATE meetings SET title = ?, start_at = ?, duration_minutes = ? WHERE id = ?');
+  const revise = db.prepare('UPDATE meetings SET title = ?, start_at = ?, duration_minutes = ?, calendar_revision = calendar_revision + 1 WHERE id = ?');
   const audit = db.prepare('INSERT INTO audit(meeting, actor, event, subject, created_at) VALUES(?, ?, ?, NULL, ?)');
 
   async function call(url, options) {

@@ -17,6 +17,8 @@ import { calendarFeedRoutes } from './calendar-feed.mjs';
 import { bookingRoutes } from './bookings.mjs';
 import { registerPersonalWorkspace } from './personal-workspace.mjs';
 import { breakoutStore } from './breakouts.mjs';
+import { registerBreakoutPlans } from './breakout-plans.mjs';
+import { registerMeetingSeries } from './meeting-series.mjs';
 import { cloudCommand, cloudRecordingId, createCloudRecording } from './cloud-recording.mjs';
 import { recordingStorage, streamRecording } from './cloud-recording-download.mjs';
 
@@ -115,6 +117,8 @@ function view(meeting, userId) {
     id: meeting.id, title: meeting.title, ownerName: meeting.owner_name, startAt: meeting.start_at, duration: meeting.duration_minutes,
     openedAt: meeting.opened_at, stoppedAt: meeting.stopped_at, lobby: !!meeting.lobby,
     locked: !!meeting.locked, encrypted: !!meeting.encrypted, hasPasscode: !!meeting.passcode, isHost: activeHost(meeting) === userId,
+    sequence: meeting.calendar_revision,
+    ...(meeting.owner === userId && meeting.series_id ? { seriesIndex: meeting.series_index } : {}),
   };
 }
 
@@ -506,12 +510,15 @@ export function createApp(options, dependencies = {}) {
         passcodes.splice(offset, batch.length, ...batch);
       }
     }
-    const insert = db.prepare('INSERT INTO meetings(id, owner, owner_name, title, start_at, duration_minutes, created_at, lobby, allow_guests, passcode, encrypted) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    const insert = db.prepare(`INSERT INTO meetings(id, owner, owner_name, title, start_at, duration_minutes, created_at,
+      lobby, allow_guests, passcode, encrypted, series_id, series_index) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     const ids = times.map(() => randomBytes(12).toString('base64url'));
+    const seriesId = ids.length > 1 ? ids[0] : null;
     db.exec('BEGIN IMMEDIATE');
     try {
       ids.forEach((id, index) => {
-        insert.run(id, req.identity, input.name, input.title, times[index], input.duration, now, Number(input.lobby), Number(input.allowGuests), passcodes[index], Number(input.encrypted));
+        insert.run(id, req.identity, input.name, input.title, times[index], input.duration, now, Number(input.lobby), Number(input.allowGuests),
+          passcodes[index], Number(input.encrypted), seriesId, seriesId ? index : null);
         log.run(id, req.identity, 'create', null, now);
       });
       db.exec('COMMIT');
@@ -528,13 +535,17 @@ export function createApp(options, dependencies = {}) {
       const current = findMeeting.get(initial.id);
       if (current.opened_at || current.stopped_at) throw new RequestError(409, 'Only unopened meetings can be rescheduled.');
       const now = Date.now();
-      db.prepare('UPDATE meetings SET title = ?, start_at = ?, duration_minutes = ? WHERE id = ?')
+      db.prepare('UPDATE meetings SET title = ?, start_at = ?, duration_minutes = ?, calendar_revision = calendar_revision + 1 WHERE id = ?')
         .run(input.title, scheduledTime(input.startAt, now), input.duration, current.id);
       log.run(current.id, req.identity, 'reschedule', null, now);
       return view(findMeeting.get(current.id), req.identity);
     });
     res.json(result);
   });
+  registerMeetingSeries(api, { db, byIdentity, meetingFor, view, serial, scheduledTime, reschedule, log,
+    error: (status, message) => new RequestError(status, message) });
+  const breakoutPlan = registerBreakoutPlans(api, { db, byIdentity, meetingFor, serial,
+    error: (status, message) => new RequestError(status, message) });
 
   async function connectMeeting(initial, identity, input, accountless = false) {
     const verified = initial.passcode && !findGuest.get(initial.id, identity)
@@ -649,7 +660,7 @@ export function createApp(options, dependencies = {}) {
   api.get('/meetings/:id/breakouts', async (req, res) => {
     const meeting = meetingFor(req);
     await requireModerator(meeting, req.identity);
-    res.json(breakoutView(meeting.id));
+    res.json({ ...breakoutView(meeting.id), plan: meeting.encrypted || meetingEnded(meeting) ? null : breakoutPlan(meeting.id) });
   });
 
   api.post('/meetings/:id/breakouts', byIdentity(20), async (req, res) => {

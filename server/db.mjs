@@ -272,6 +272,9 @@ export function openDatabase(filename) {
   if (!columns.has('host_identity')) db.exec('ALTER TABLE meetings ADD COLUMN host_identity TEXT');
   if (!columns.has('host_version')) db.exec('ALTER TABLE meetings ADD COLUMN host_version INTEGER NOT NULL DEFAULT 0');
   if (!columns.has('duration_minutes')) db.exec('ALTER TABLE meetings ADD COLUMN duration_minutes INTEGER NOT NULL DEFAULT 60');
+  if (!columns.has('series_id')) db.exec('ALTER TABLE meetings ADD COLUMN series_id TEXT');
+  if (!columns.has('series_index')) db.exec('ALTER TABLE meetings ADD COLUMN series_index INTEGER');
+  if (!columns.has('calendar_revision')) db.exec('ALTER TABLE meetings ADD COLUMN calendar_revision INTEGER NOT NULL DEFAULT 0');
   if (!columns.has('encrypted')) {
     db.exec('ALTER TABLE meetings ADD COLUMN encrypted INTEGER NOT NULL DEFAULT 0');
   }
@@ -285,6 +288,11 @@ export function openDatabase(filename) {
     db.exec('ALTER TABLE team_messages ADD COLUMN reply_to INTEGER REFERENCES team_messages(id) ON DELETE CASCADE');
   }
   db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS meetings_by_series ON meetings(series_id, series_index) WHERE series_id IS NOT NULL;
+    CREATE TABLE IF NOT EXISTS meeting_breakout_plans (
+      meeting TEXT PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,
+      plan TEXT NOT NULL
+    ) STRICT;
     CREATE INDEX IF NOT EXISTS team_message_threads ON team_messages(channel, reply_to, id DESC);
     CREATE INDEX IF NOT EXISTS team_message_replies ON team_messages(reply_to) WHERE reply_to IS NOT NULL;
     CREATE TABLE IF NOT EXISTS team_attachments (

@@ -19,7 +19,7 @@ npm ci
 npm run dist
 ```
 
-The installer is written to `release/Meetrix-InsForge-Setup-0.1.18-x64.exe`. To preconfigure the installer with a project, copy `.env.example` to `.env`, fill the InsForge settings, and run `npm run dist:local`. If your project requires an anon key, use its public anon key. Installer and executable signing are left to the distributor. Builds fetch the pinned caption models once and cache them in `vendor/caption-models`.
+The installer is written to `release/Meetrix-InsForge-Setup-0.1.19-x64.exe`. To preconfigure the installer with a project, copy `.env.example` to `.env`, fill the InsForge settings, and run `npm run dist:local`. If your project requires an anon key, use its public anon key. Installer and executable signing are left to the distributor. Builds fetch the pinned caption models once and cache them in `vendor/caption-models`.
 
 ## Host a workspace
 
@@ -54,9 +54,11 @@ Connect **Mail** separately to read recent Inbox and Sent messages and compose p
 ## Meeting features
 
 - Schedule one-time, daily, weekday, weekly, or monthly meetings. Choose specific weekdays for weekly schedules and a fixed date, ordinal weekday, or last matching weekday for monthly schedules. End a series after a count or on a date. A series can contain up to 52 occurrences within the next year. Preview the dates before saving, then download a single occurrence or the whole new series as an iCalendar file for Google Calendar, Outlook, or Apple Calendar.
+- Open an occurrence’s management menu and select **Manage series** to edit dates, names, or durations or cancel upcoming unopened occurrences. Apply changes from the selected occurrence onward or across all upcoming occurrences. Meetrix keeps each occurrence’s invite link and increments its calendar version. Series management applies to series created in 0.1.19 or later. Calendar exports and subscriptions reflect changes. Event cancellations in connected Google or Outlook calendars are handled in the provider.
 - Audio, video, gallery and speaker views, screen sharing, chat, and reactions.
 - Microphone, camera, and speaker selection before joining or from **Devices** during a call. Browser support determines speaker availability.
 - **Settings** includes a live microphone meter, a speaker test tone, noise reduction, camera preview and mirroring, and saved defaults for joining a call. Preview and diagnostic media stays on your device.
+- Under **Settings → Audio → Microphone playback**, record up to five seconds and play it back through the selected speaker. The microphone releases when recording ends and the sample is cleared when you leave Audio settings.
 - Use **Camera background** in Video settings, the pre-join setup, or a meeting’s **Devices** dialog. Choose blur or a JPEG, PNG, or WebP image from your device. The app saves your selection on this device. The bundled model applies the effect locally before Meetrix publishes your camera.
 - Use **Push-to-talk key** under **Keyboard shortcuts** to temporarily open a muted microphone with Space, Backtick, or F8 while the meeting window is focused.
 - On Windows, use the notification-area and reminder options in **Settings → Appearance**. While Meetrix is running, reminders appear within five minutes of a scheduled start and omit meeting details. Double-click the Meetrix icon in the notification area to restore the window.
@@ -70,6 +72,7 @@ Connect **Mail** separately to read recent Inbox and Sent messages and compose p
 - Hosts can allow invitees without accounts. The waiting room still applies, and the host sees those invitees labeled as unverified guests.
 - In standard meetings, hosts and co-hosts can use **Breakouts** to name up to eight rooms, assign connected attendees manually or evenly, and send text announcements. Hosts can set an automatic time limit when opening the rooms or start a 15-, 30-, or 60-second return countdown while the rooms are open. **Close all rooms** returns attendees to the main meeting immediately. Hosts and co-hosts stay in the main room. Automatic moves start with the microphone and camera off.
 - Turn on **Let attendees choose their room** when opening breakouts to let attendees join, switch rooms, and return to the main meeting. Room changes start with the camera and microphone off.
+- From an unopened standard meeting’s management menu, select **Prepare breakout rooms** to save room names, a time limit, and room-choice settings. The host or co-host can load the plan in **Breakouts**, assign admitted participants, and open the rooms.
 - In the main room of a standard meeting, open **Captions** to read live captions, show or hide them over the stage, and save the caption history on this device. Hosts can type captions themselves or assign a connected attendee to type them.
 - Hosts can turn on automatic captions in standard meetings. Each speaker who chooses **Caption my microphone** in the Windows x64 app can share English captions. Recognition runs on that device. Other meeting clients can display the text.
 - Under **Captions**, attendees can translate automatic English captions into Hindi or Spanish. The first translated line loads the bundled model. The latest lines appear in the selected language, and caption exports include all available translations alongside the originals.

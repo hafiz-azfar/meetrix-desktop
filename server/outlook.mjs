@@ -22,7 +22,7 @@ export function outlookRoutes({ db, origin, settings, limits, error, serial, sch
   const link = db.prepare('SELECT event, etag FROM outlook_events WHERE meeting = ?');
   const save = db.prepare('INSERT INTO outlook_events(meeting, event, etag) VALUES (?, ?, ?) ON CONFLICT(meeting) DO UPDATE SET event=excluded.event, etag=excluded.etag');
   const unlink = db.prepare('DELETE FROM outlook_events WHERE meeting IN (SELECT id FROM meetings WHERE owner = ?)');
-  const revise = db.prepare('UPDATE meetings SET title = ?, start_at = ?, duration_minutes = ? WHERE id = ?');
+  const revise = db.prepare('UPDATE meetings SET title = ?, start_at = ?, duration_minutes = ?, calendar_revision = calendar_revision + 1 WHERE id = ?');
   const audit = db.prepare('INSERT INTO audit(meeting, actor, event, subject, created_at) VALUES(?, ?, ?, NULL, ?)');
   let busy = false;
   let closed = false;

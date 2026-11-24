@@ -5,7 +5,9 @@ import {
   Video, X,
 } from 'lucide-react';
 import { apiFor, calendarInvite, calendarSeries, invitation, parseInvitation } from './api.js';
-import { maxOccurrences, maxRepeatInterval, meetingOccurrences } from './meeting-schedule.js';
+import { localDateValue, maxOccurrences, maxRepeatInterval, meetingOccurrences } from './meeting-schedule.js';
+import { SeriesManager } from './series-manager.jsx';
+import { BreakoutPlan } from './breakout-plan.jsx';
 import { generateRoomKey, validRoomKey } from './encryption.js';
 import { Logo, Dialog } from './ui.jsx';
 import { TeamChat } from './team-chat.jsx';
@@ -45,11 +47,6 @@ const occurrenceLabel = new Intl.DateTimeFormat(undefined, {
 });
 const scheduleWeekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const inviteCode = new URLSearchParams(location.search).get('m');
-
-function localDateValue(time) {
-  const local = new Date(time - new Date(time).getTimezoneOffset() * 60000);
-  return local.toISOString().slice(0, 16);
-}
 
 function MeetingForm({ mode, meeting, api, name, close, onCreated }) {
   const [working, setWorking] = useState(false);
@@ -406,11 +403,24 @@ export function Workspace({ config, user, accountControl, prefs, updatePrefs }) 
       </div>
     </main>
     {['start', 'schedule'].includes(modal) && <MeetingForm mode={modal} api={api} name={name} close={() => setModal('')} onCreated={created} />}
-    {editing && modal !== 'edit' && <Dialog title={editing.title} close={() => setEditing(null)}>
+    {editing && !['edit', 'series', 'breakout-plan'].includes(modal) && <Dialog title={editing.title} close={() => setEditing(null)}>
       {config.googleCalendar && <CalendarMeetingSync api={api} meeting={editing} onChanged={refresh} />}
       {config.outlook && <CalendarMeetingSync api={api} meeting={editing} provider="outlook" onChanged={refresh} />}
-      <div className="dialog-actions"><button className="button danger" onClick={() => cancel(editing)}>Cancel meeting</button><button className="button primary" onClick={() => setModal('edit')}>Reschedule</button></div></Dialog>}
+      <div className="dialog-actions">
+        {!editing.encrypted && <button className="button" onClick={() => setModal('breakout-plan')}>Prepare breakout rooms</button>}
+        {Number.isInteger(editing.seriesIndex) && <button className="button" onClick={() => setModal('series')}>Manage series</button>}
+        <button className="button danger" onClick={() => cancel(editing)}>Cancel meeting</button>
+        <button className="button primary" onClick={() => setModal('edit')}>Reschedule</button>
+      </div></Dialog>}
     {editing && modal === 'edit' && <MeetingForm mode="edit" meeting={editing} api={api} name={name} close={() => { setModal(''); setEditing(null); }} onCreated={meeting => { setEditing(null); created(meeting, true); }} />}
+    {editing && modal === 'series' && <SeriesManager meeting={editing} api={api} close={() => setModal('')} onSaved={(result, action) => {
+      setModal(''); setEditing(null); refresh();
+      setNotice(result.updated + (result.updated === 1 ? ' occurrence ' : ' occurrences ') +
+        (action === 'cancel' ? 'canceled.' : 'updated.'), result.meetings);
+    }} />}
+    {editing && modal === 'breakout-plan' && <BreakoutPlan meeting={editing} api={api} close={() => setModal('')} onSaved={saved => {
+      setModal(''); setEditing(null); setNotice(saved ? 'Breakout plan saved.' : 'Breakout plan removed.');
+    }} />}
     {archived && <Dialog title={archived.title + ' · Notes'} close={() => setArchived(null)}><Notes api={api} id={archived.id} readOnly /></Dialog>}
     {modal === 'google-calendar' && <GoogleCalendarConnection api={api} close={() => setModal('')} />}
     {['outlook-calendar', 'outlook-mail'].includes(modal) && <OutlookConnection api={api}

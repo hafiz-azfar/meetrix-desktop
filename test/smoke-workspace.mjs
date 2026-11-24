@@ -49,6 +49,15 @@ try {
       window.testClip = { track, bytes: 0 };
       return stream;
     };
+    const capture = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+    navigator.mediaDevices.getUserMedia = async options => {
+      const stream = await capture(options);
+      if (options.audio) {
+        window.testMicrophoneTracks = stream.getAudioTracks();
+        window.testMicrophoneOpenedAt = performance.now();
+      }
+      return stream;
+    };
   });
   const auth = await owner.request.post(origin + '/api/auth/email/password', {
     headers: { Origin: origin }, data: { email: 'test@example.test', password: 'test-password' },
@@ -181,6 +190,20 @@ try {
   await owner.getByRole('button', { name: 'Appearance', exact: true }).click();
   assert.equal(await owner.getByLabel('Accent color').inputValue(), 'teal');
   assert.equal(await owner.getByLabel('App theme').inputValue(), 'dark');
+  await owner.getByRole('button', { name: 'Audio', exact: true }).click();
+  await owner.getByRole('button', { name: 'Record sample', exact: true }).click();
+  await owner.getByText('Recording sample…', { exact: true }).waitFor();
+  await owner.waitForFunction(() => window.testMicrophoneTracks?.[0]?.readyState === 'live' &&
+    performance.now() - window.testMicrophoneOpenedAt >= 650);
+  await owner.getByRole('button', { name: 'Finish recording', exact: true }).click();
+  const playback = owner.getByLabel('Recorded microphone sample');
+  await playback.waitFor();
+  await owner.waitForFunction(() => document.querySelector('audio[aria-label="Recorded microphone sample"]')?.readyState >= 2);
+  await playback.evaluate(audio => audio.play());
+  await owner.waitForFunction(() => document.querySelector('audio[aria-label="Recorded microphone sample"]')?.currentTime > 0);
+  assert.equal(await owner.evaluate(() => window.testMicrophoneTracks[0].readyState), 'ended');
+  await owner.getByRole('button', { name: 'Discard sample', exact: true }).click();
+  await playback.waitFor({ state: 'detached' });
   await owner.getByRole('button', { name: 'Keyboard shortcuts', exact: true }).click();
   await owner.getByLabel('Push-to-talk key').selectOption('F8');
   await owner.getByRole('button', { name: 'Meetings', exact: true }).click();
@@ -209,9 +232,45 @@ try {
   await seriesReady.click();
   const calendarFile = await readFile(await (await calendarDownload).path(), 'utf8');
   assert.equal(calendarFile.match(/BEGIN:VEVENT/g)?.length, 4);
+  const recurring = owner.locator('article').filter({ hasText: 'Weekly planning' });
+  await recurring.nth(1).getByRole('button', { name: 'Manage scheduled meeting' }).click();
+  await owner.getByRole('button', { name: 'Manage series' }).click();
+  const series = owner.getByRole('dialog', { name: 'Manage meeting series' });
+  await series.getByText('Preview 3 selected times').waitFor();
+  await series.getByLabel('Meeting name').fill('Weekly review');
+  await series.getByLabel('Duration (minutes)').fill('45');
+  await series.getByRole('button', { name: 'Save series changes' }).click();
+  await owner.getByText('3 occurrences updated.', { exact: true }).waitFor();
+  const updatedCalendarDownload = owner.waitForEvent('download');
+  await seriesReady.click();
+  const updatedCalendar = await readFile(await (await updatedCalendarDownload).path(), 'utf8');
+  assert.deepEqual(updatedCalendar.match(/^UID:.*$/gm), calendarFile.match(/^UID:.*$/gm));
+  assert.equal(updatedCalendar.match(/^SEQUENCE:1$/gm)?.length, 3);
+  await owner.locator('article').filter({ hasText: 'Weekly review' }).last().getByRole('button', { name: 'Manage scheduled meeting' }).click();
+  await owner.getByRole('button', { name: 'Manage series' }).click();
+  await series.getByText('Preview 1 selected time', { exact: true }).waitFor();
+  owner.once('dialog', dialog => dialog.accept());
+  await series.getByRole('button', { name: 'Cancel selected meetings' }).click();
+  await owner.getByText('1 occurrence canceled.', { exact: true }).waitFor();
   const scheduled = owner.locator('article').filter({ hasText: 'Office hours' });
+  await scheduled.getByRole('button', { name: 'Manage scheduled meeting' }).click();
+  await owner.getByRole('button', { name: 'Prepare breakout rooms' }).click();
+  const plan = owner.getByRole('dialog', { name: 'Prepare breakout rooms' });
+  await plan.getByLabel('Room 1 name').fill('Research');
+  await plan.getByLabel('Room 2 name').fill('Design');
+  await plan.getByLabel('Let attendees choose their room').check();
+  await plan.getByLabel('Close automatically after (minutes)').fill('10');
+  await plan.getByRole('button', { name: 'Save breakout plan' }).click();
+  await owner.getByText('Breakout plan saved.', { exact: true }).waitFor();
   await scheduled.getByRole('button', { name: 'Open' }).click();
   await owner.getByRole('button', { name: 'Enter room' }).click();
+  await owner.getByRole('button', { name: 'Breakouts', exact: true }).click();
+  await owner.getByRole('button', { name: 'Load scheduled plan' }).click();
+  assert.equal(await owner.getByLabel('Name for breakout room 1').inputValue(), 'Research');
+  assert.equal(await owner.getByLabel('Close automatically after (minutes)').inputValue(), '10');
+  await owner.getByRole('button', { name: 'Open breakout rooms' }).click();
+  await owner.getByRole('heading', { name: 'Design' }).waitFor();
+  await owner.getByRole('button', { name: 'Close all rooms' }).click();
   await owner.bringToFront();
   try { await owner.getByText('Connected', { exact: true }).waitFor({ timeout: 45_000 }); }
   catch (failure) {

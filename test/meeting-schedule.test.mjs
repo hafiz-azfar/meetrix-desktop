@@ -1,11 +1,24 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { meetingOccurrences } from '../src/meeting-schedule.js';
+import { meetingOccurrences, shiftMeetingTimes } from '../src/meeting-schedule.js';
 import { meetingCalendar } from '../src/calendar.js';
 
 process.env.TZ = 'America/New_York';
 
 const iso = times => times.map(time => time.toISOString());
+
+test('shifting a series moves times in local calendar time across daylight saving', () => {
+  const meetings = [
+    { startAt: Date.parse('2026-03-05T16:00:00Z') },
+    { startAt: Date.parse('2026-03-12T15:00:00Z') },
+  ];
+  assert.deepEqual(iso(shiftMeetingTimes(meetings, '2026-03-06T13:00')), [
+    '2026-03-06T18:00:00.000Z', '2026-03-13T17:00:00.000Z',
+  ]);
+  assert.deepEqual(iso(shiftMeetingTimes(meetings, '2026-03-05T11:00')), [
+    '2026-03-05T16:00:00.000Z', '2026-03-12T15:00:00.000Z',
+  ]);
+});
 
 test('daily and weekly schedules preserve the chosen wall time across daylight saving', () => {
   const now = Date.parse('2026-03-01T00:00:00Z');

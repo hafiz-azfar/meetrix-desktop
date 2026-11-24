@@ -12,7 +12,7 @@ export function calendarFeedRoutes(db, origin, limits) {
   const save = db.prepare('INSERT INTO calendar_feeds(owner, token_hash) VALUES(?, ?) ON CONFLICT(owner) DO UPDATE SET token_hash = excluded.token_hash');
   const remove = db.prepare('DELETE FROM calendar_feeds WHERE owner = ?');
   const meetings = db.prepare(
-    'SELECT id, title, start_at AS startAt, duration_minutes AS duration FROM meetings WHERE owner = ? AND stopped_at IS NULL AND start_at + duration_minutes * 60000 >= ? ORDER BY start_at LIMIT 200',
+    'SELECT id, title, start_at AS startAt, duration_minutes AS duration, calendar_revision AS sequence FROM meetings WHERE owner = ? AND stopped_at IS NULL AND start_at + duration_minutes * 60000 >= ? ORDER BY start_at LIMIT 200',
   );
   return {
     public(api) {

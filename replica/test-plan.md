@@ -71,6 +71,9 @@
 | F19-H3 | Channel members post a threaded attachment and download it. Outsiders and removed members are denied. Removing the file preserves its message | API and workspace browser smoke tests |
 | F35-H1 | A selected weekday series previews and exports the same meeting times. Ordinal and last-weekday patterns preserve wall time through DST | Schedule unit and workspace browser smoke tests |
 | F36-H1 | A selected desktop accent persists when the app theme changes or the workspace reloads | Workspace browser smoke test |
+| F37-H1 | Series changes preserve invite URLs and calendar UIDs. Canceling upcoming meetings leaves an opened meeting available. Stale writes are rejected | API, schedule unit, and workspace browser smoke tests |
+| F38-H1 | The organizer prepares rooms for a standard meeting and loads the plan after starting. Other accounts cannot read or change the scheduled plan | API and workspace browser smoke tests |
+| F39-H1 | Audio settings records and plays a local sample. Ending capture stops the input track and discarding the sample clears playback | Workspace browser smoke test |
 | F12-P1 | 100-person load, 30-hour duration, and production availability | Deployment-scale verification |
 
 Run `npm test` for the API suite. The RTC tests use two isolated browser pages and a real loopback LiveKit server. The desktop test is aimed at the Windows development build.
