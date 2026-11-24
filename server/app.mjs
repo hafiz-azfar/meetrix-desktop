@@ -27,6 +27,8 @@ import { recordingStorage, streamRecording } from './cloud-recording-download.mj
 
 const scrypt = promisify(scryptCallback);
 const maxDuration = 30 * 60 * 60 * 1000;
+const hostReconnectGrace = 30_000;
+const hostCheckBatch = 12;
 const optionalPasscode = z.string().min(8).max(128).optional();
 const person = z.string().trim().min(1).max(60);
 const participantIdentity = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
@@ -159,7 +161,10 @@ export function createApp(options, dependencies = {}) {
   const findGuest = db.prepare('SELECT * FROM attendance WHERE meeting = ? AND identity = ?');
   const saveBreakoutEmailKey = db.prepare('UPDATE attendance SET breakout_email_key = ? WHERE meeting = ? AND identity = ?');
   const findCoHost = db.prepare('SELECT sid FROM meeting_cohosts WHERE meeting = ? AND identity = ?');
-  const listCoHosts = db.prepare('SELECT identity, sid FROM meeting_cohosts WHERE meeting = ?');
+  const listCoHosts = db.prepare('SELECT identity, sid FROM meeting_cohosts WHERE meeting = ? ORDER BY identity');
+  const meetingsWithCoHosts = db.prepare(`SELECT id FROM meetings WHERE id > ? AND opened_at > ? AND stopped_at IS NULL AND encrypted = 0
+    AND EXISTS (SELECT 1 FROM meeting_cohosts WHERE meeting = meetings.id) ORDER BY id LIMIT ?`);
+  const absentHosts = new Map();
   const grantCoHost = db.prepare(`INSERT INTO meeting_cohosts(meeting, identity, sid) VALUES(?, ?, ?)
     ON CONFLICT(meeting, identity) DO UPDATE SET sid = excluded.sid`);
   const revokeCoHost = db.prepare('DELETE FROM meeting_cohosts WHERE meeting = ? AND identity = ?');
@@ -400,11 +405,13 @@ export function createApp(options, dependencies = {}) {
     return participantIn(meeting.id, identity);
   }
   async function participantIn(roomId, identity) {
+    const participant = await lookupParticipant(roomId, identity);
+    return participant?.state === ParticipantInfo_State.ACTIVE ? participant : null;
+  }
+  function lookupParticipant(roomId, identity) {
     return media(async client => {
-      try {
-        const participant = await client.getParticipant(roomId, identity);
-        return participant?.state === ParticipantInfo_State.ACTIVE ? participant : null;
-      } catch (error) { if (isNotFound(error)) return null; throw error; }
+      try { return await client.getParticipant(roomId, identity); }
+      catch (error) { if (isNotFound(error)) return null; throw error; }
     });
   }
   async function isActiveCoHost(meeting, identity) {
@@ -450,6 +457,7 @@ export function createApp(options, dependencies = {}) {
     }
   }
   async function disconnectRoom(meeting, actor) {
+    absentHosts.delete(meeting.id);
     breakoutVoice.stop(meeting.id);
     await cloud?.stopMeeting(meeting, 'The meeting ended.');
     if (!meeting.stopped_at) {
@@ -581,7 +589,77 @@ export function createApp(options, dependencies = {}) {
     const data = new TextEncoder().encode(JSON.stringify({
       hostIdentity: activeHost(meeting), hostVersion: meeting.host_version,
     }));
-    return media(client => client.sendData?.(meeting.id, data, DataPacket_Kind.RELIABLE, { topic: hostRolesTopic })).catch(() => {});
+    const roomIds = [meeting.id, ...breakouts.list(meeting.id).map(room => room.id)];
+    return Promise.allSettled(roomIds.map(id => media(client => client.sendData?.(id, data, DataPacket_Kind.RELIABLE, { topic: hostRolesTopic }))));
+  }
+  async function changeHost(meeting, successor, event, verify) {
+    await cloud?.stopMeeting(meeting, 'Meeting control changed.');
+    if (verify && (!(await verify()) || meetingEnded(meeting))) return meeting;
+    const previousHost = activeHost(meeting);
+    const now = Date.now();
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      addPreviousHost.run(meeting.id, previousHost, meeting.owner_name, now);
+      revokeCoHost.run(meeting.id, successor);
+      assignHost.run(successor, meeting.id);
+      log.run(meeting.id, previousHost, event, successor, now);
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+    absentHosts.delete(meeting.id);
+    breakoutVoice.stop(meeting.id, previousHost);
+    const updated = findMeeting.get(meeting.id);
+    await signalHostTransfer(updated);
+    return updated;
+  }
+  async function hostIsPresent(meeting) {
+    const host = activeHost(meeting);
+    const participant = await lookupParticipant(currentLocation(meeting.id, host).roomId, host);
+    return Boolean(participant && participant.state !== ParticipantInfo_State.DISCONNECTED);
+  }
+  async function checkHost(meetingId, now) {
+    const meeting = findMeeting.get(meetingId);
+    const delegates = listCoHosts.all(meetingId);
+    if (meetingEnded(meeting) || !delegates.length || await hostIsPresent(meeting)) {
+      absentHosts.delete(meetingId);
+      return;
+    }
+    const absence = absentHosts.get(meetingId);
+    if (!absence || absence.version !== meeting.host_version) {
+      absentHosts.set(meetingId, { version: meeting.host_version, since: now, checkedAt: now });
+      return;
+    }
+    absence.checkedAt = now;
+    if (now - absence.since < hostReconnectGrace) return;
+    for (const { identity } of delegates) {
+      if (identity.startsWith('guest_') || !(await isActiveCoHost(meeting, identity))) continue;
+      await changeHost(meeting, identity, 'host-succession', async () => {
+        if (!(await isActiveCoHost(meeting, identity))) return false;
+        if (!(await hostIsPresent(meeting))) return true;
+        absentHosts.delete(meetingId);
+        return false;
+      });
+      return;
+    }
+  }
+  let hostCheckCursor = '';
+  let checkingHosts = false;
+  async function checkHostContinuity(now = performance.now()) {
+    if (checkingHosts || !rooms) return;
+    checkingHosts = true;
+    try {
+      for (const [meeting, absence] of absentHosts) {
+        if (now - absence.checkedAt > 600_000) absentHosts.delete(meeting);
+      }
+      const upcoming = meetingsWithCoHosts.all(hostCheckCursor, Date.now() - maxDuration, hostCheckBatch);
+      hostCheckCursor = upcoming.length === hostCheckBatch ? upcoming.at(-1).id : '';
+      await Promise.all(upcoming.map(({ id }) => serial(id, () => checkHost(id, now)).catch(() => {
+        // An unavailable room service is not evidence that the host left.
+        absentHosts.delete(id);
+      })));
+    } finally { checkingHosts = false; }
   }
   function muteTracks(client, roomId, participant, source) {
     return Promise.all(participant.tracks.filter(track => track.source === source && !track.muted)
@@ -951,22 +1029,7 @@ export function createApp(options, dependencies = {}) {
         if (participant?.sid !== command.sid || breakouts.assigned(current.id, command.identity)) {
           throw new RequestError(409, 'That participant must be connected to the main meeting.');
         }
-        await cloud?.stopMeeting(current, 'Meeting control changed.');
-        const now = Date.now();
-        db.exec('BEGIN IMMEDIATE');
-        try {
-          addPreviousHost.run(current.id, hostIdentity, current.owner_name, now);
-          revokeCoHost.run(current.id, command.identity);
-          assignHost.run(command.identity, current.id);
-          log.run(current.id, req.identity, command.action, command.identity, now);
-          db.exec('COMMIT');
-        } catch (error) {
-          db.exec('ROLLBACK');
-          throw error;
-        }
-        const updated = findMeeting.get(current.id);
-        await signalHostTransfer(updated);
-        return meetingRoles(updated);
+        return meetingRoles(await changeHost(current, command.identity, command.action));
       }
       let rolesChanged = false;
       if (command.action === 'co-host') {
@@ -1229,6 +1292,8 @@ export function createApp(options, dependencies = {}) {
     } finally { closingBreakouts = false; }
   }, 1000);
   breakoutTimer.unref();
+  const hostTimer = rooms ? setInterval(checkHostContinuity, 5000) : null;
+  hostTimer?.unref();
   let reconcilingCloud = false;
   const recordingTimer = cloud && setInterval(async () => {
     if (reconcilingCloud) return;
@@ -1242,9 +1307,10 @@ export function createApp(options, dependencies = {}) {
   const syncCalendars = () => Promise.allSettled([google?.tick(), msOutlook?.tick()]);
   const calendarTimer = (google || msOutlook) && setInterval(syncCalendars, 60000);
   calendarTimer?.unref();
-  return { app, syncCalendars, close() {
+  return { app, syncCalendars, checkHostContinuity, close() {
     clearInterval(timer);
     clearInterval(breakoutTimer);
+    clearInterval(hostTimer);
     clearInterval(recordingTimer);
     clearInterval(calendarTimer);
     google?.close();

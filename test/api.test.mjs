@@ -18,6 +18,7 @@ async function fixture(t, authFixture) {
   const packets = [];
   const livePeople = new Map();
   const failedRemovals = new Set();
+  const failedLookups = new Set();
   const rooms = {
     async createRoom(details) { calls.push(['open', details]); },
     async deleteRoom(id) { calls.push(['end', id]); },
@@ -25,9 +26,13 @@ async function fixture(t, authFixture) {
       calls.push(['remove', id, identity, options]);
       if (failedRemovals.has(identity)) throw new Error('LiveKit is unavailable');
     },
-    async getParticipant(_id, identity) {
-      if (!livePeople.has(identity)) throw Object.assign(new Error('Participant is absent'), { status: 404 });
-      return livePeople.get(identity);
+    async getParticipant(id, identity) {
+      if (failedLookups.has(identity)) throw new Error('LiveKit is unavailable');
+      const participant = livePeople.get(identity);
+      if (!participant || (participant.roomId && participant.roomId !== id)) {
+        throw Object.assign(new Error('Participant is absent'), { status: 404 });
+      }
+      return participant;
     },
     async listParticipants() { return [...livePeople.values()]; },
     async mutePublishedTrack(id, identity, sid) { calls.push(['mute', id, identity, sid]); },
@@ -36,7 +41,7 @@ async function fixture(t, authFixture) {
       if (options?.topic === breakoutVoiceTopic) packets.push({ room, data });
     },
   };
-  const { app, close } = createApp({
+  const { app, checkHostContinuity, close } = createApp({
     origin, insforgeUrl, livekitKey, livekitSecret,
     livekitUrl: 'wss://livekit.meetrix.test', databasePath: ':memory:',
   }, { rooms, createAuth: authFixture, authenticate: async token => {
@@ -70,7 +75,7 @@ async function fixture(t, authFixture) {
   const create = input => api('/meetings', { method: 'POST', body: { title: 'Roadmap', name: 'Owner', ...input } });
   const connect = (id, token, input = {}) => api('/meetings/' + id + '/connect', { method: 'POST', token, body: { name: token, ...input } });
   const moderate = (id, body, token = 'owner') => api('/meetings/' + id + '/moderate', { method: 'POST', body, token });
-  return { api, create, connect, moderate, calls, packets, livePeople, failedRemovals };
+  return { api, create, connect, moderate, calls, packets, livePeople, failedRemovals, failedLookups, checkHostContinuity };
 }
 
 test('InsForge and LiveKit production configuration are pinned', () => {
@@ -1039,6 +1044,88 @@ test('a live host transfer preserves the organizer and replaces in-room authorit
   assert.equal((await transfer('owner', 'PA_owner', 'guest')).json.hostVersion, 2);
   assert.equal((await place(owner.routingKey)).json.hostIdentity, 'owner');
   assert.equal((await moderate(id, { action: 'end' })).status, 200);
+});
+
+test('host succession waits for confirmed absence and elects only an active, preauthorized co-host', async t => {
+  const { api, create, connect, moderate, livePeople, failedLookups, checkHostContinuity } = await fixture(t);
+  const { id } = (await create({ lobby: false })).json;
+  const path = '/meetings/' + id;
+  const owner = (await connect(id, 'owner')).json;
+  const publish = (identity, sid, state = ParticipantInfo_State.ACTIVE) => livePeople.set(identity, { identity, sid, state });
+  const place = async () => (await api(path + '/placement', { token: '', method: 'POST', body: { key: owner.routingKey, roomId: id } })).json;
+  const grant = (identity, sid) => moderate(id, { action: 'co-host', identity, sid, enabled: true });
+  for (const identity of ['guest', 'stranger', 'attendee']) {
+    await connect(id, identity);
+    publish(identity, 'PA_' + identity);
+  }
+  assert.equal((await grant('guest', 'PA_guest')).status, 200);
+  assert.equal((await grant('stranger', 'PA_stranger')).status, 200);
+  publish('guest', 'PA_reconnected');
+  livePeople.delete('stranger');
+
+  await checkHostContinuity(0);
+  await checkHostContinuity(29999);
+  assert.equal((await place()).hostVersion, 0);
+  publish('owner', 'PA_owner', ParticipantInfo_State.JOINED);
+  await checkHostContinuity(30000);
+  livePeople.delete('owner');
+  await checkHostContinuity(35000);
+  failedLookups.add('owner');
+  await checkHostContinuity(65000);
+  failedLookups.delete('owner');
+  publish('stranger', 'PA_stranger');
+  await checkHostContinuity(70000);
+  assert.equal((await place()).hostVersion, 0);
+  livePeople.delete('stranger');
+  await checkHostContinuity(100000);
+  assert.equal((await place()).hostIdentity, 'owner');
+  publish('stranger', 'PA_stranger');
+  await Promise.all([checkHostContinuity(105000), checkHostContinuity(105000)]);
+  assert.equal((await place()).hostIdentity, 'stranger');
+  assert.equal((await place()).hostVersion, 1);
+  assert.equal((await moderate(id, { action: 'end' })).status, 403);
+  assert.equal((await moderate(id, { action: 'end' }, 'guest')).status, 403);
+  assert.equal((await api(path + '/lobby', { token: 'stranger' })).status, 200);
+  publish('owner', 'PA_returning');
+  await checkHostContinuity(140000);
+  assert.equal((await place()).hostIdentity, 'stranger');
+  assert.equal((await place()).hostVersion, 1);
+  assert.equal((await moderate(id, { action: 'end' }, 'stranger')).status, 200);
+});
+
+test('host succession follows moderators into breakout rooms and signals both room populations', async t => {
+  const { api, create, connect, moderate, calls, livePeople, checkHostContinuity } = await fixture(t);
+  const { id } = (await create({ lobby: false })).json;
+  const path = '/meetings/' + id;
+  const owner = (await connect(id, 'owner')).json;
+  const delegate = (await connect(id, 'guest')).json;
+  const publish = (identity, sid, roomId, metadata) => livePeople.set(identity, { identity, sid, roomId, metadata, state: ParticipantInfo_State.ACTIVE });
+  publish('owner', 'PA_owner', id);
+  publish('guest', 'PA_guest', id);
+  await moderate(id, { action: 'co-host', identity: 'guest', sid: 'PA_guest', enabled: true });
+  const post = (endpoint, body, token) => api(path + endpoint, { token, method: 'POST', body });
+  const open = await post('/breakouts', { action: 'open', selfSelect: true, rooms: [{ name: 'Review', members: [] }] }, 'owner');
+  const roomId = open.json.rooms[0].id;
+  const placement = session => ({ key: session.routingKey, roomId: id, placementEpoch: session.placementEpoch });
+  for (const [token, session] of [['owner', owner], ['guest', delegate]]) {
+    const start = placement(session);
+    assert.equal((await post('/moderator-location', { ...start, destination: roomId }, token)).status, 200);
+    const moved = (await post('/placement', start, token)).json;
+    const claims = await new TokenVerifier(livekitKey, livekitSecret).verify(moved.token);
+    publish(token, 'PA_visit_' + token, roomId, claims.metadata);
+  }
+  await checkHostContinuity(0);
+  await checkHostContinuity(35000);
+  const status = () => post('/placement', { ...placement(delegate), roomId }, 'guest');
+  assert.equal((await status()).json.hostIdentity, 'owner');
+  livePeople.delete('owner');
+  await checkHostContinuity(40000);
+  await checkHostContinuity(70000);
+  assert.equal((await status()).json.hostIdentity, 'guest');
+  assert.ok(calls.some(([kind, room, options]) => kind === 'data' && room === roomId && options.topic === 'meetrix.host-roles'));
+  assert.ok(calls.some(([kind, room, options]) => kind === 'data' && room === id && options.topic === 'meetrix.host-roles'));
+  assert.equal((await post('/breakouts', { action: 'close' }, 'guest')).status, 200);
+  assert.equal((await status()).json.roomId, id);
 });
 
 test('shared notes require access and reject stale writes; encrypted rooms skip stored notes', async t => {

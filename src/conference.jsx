@@ -147,6 +147,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, recap, connectionErro
   const [error, setError] = useState('');
   const [toast, setToast] = useState(session.roomNotice || '');
   const [confirmation, setConfirmation] = useState(false);
+  const [nextHost, setNextHost] = useState('');
   const [microphoneRequest, setMicrophoneRequest] = useState(false);
   const [requestingHelp, setRequestingHelp] = useState(false);
   const [settings, setSettings] = useState(false);
@@ -194,6 +195,9 @@ function Call({ session, api, prefs, updatePrefs, onLeave, recap, connectionErro
   const canModerate = host || coHost;
   const canManageBreakouts = !session.meeting.encrypted && canModerate;
   const canOpenBreakouts = canManageBreakouts || breakoutChoices.length > 0;
+  const hostCandidates = confirmation && host && meetingTools && online
+    ? participants.filter(participant => !participant.isLocal && participant.sid && !participant.identity.startsWith('guest_')) : [];
+  const selectedHost = hostCandidates.find(participant => participant.identity === nextHost);
   const pushToTalk = usePushToTalk(room, {
     key: prefs.pushToTalk, online, deviceId: prefs.microphoneId, reduceNoise: prefs.reduceNoise, onError: setError,
   });
@@ -405,12 +409,12 @@ function Call({ session, api, prefs, updatePrefs, onLeave, recap, connectionErro
     }
   }
 
-  async function exit(end) {
+  async function exit(command) {
     pushToTalk.cancel();
     setExiting(true);
     await stopAudioShare();
     await recording.finishForExit();
-    if (end && !(await moderate({ action: 'end' }))) { setExiting(false); return; }
+    if (command && !(await moderate(command))) { setExiting(false); return; }
     await room.disconnect().catch(() => {});
     if (document.fullscreenElement === document.documentElement) await document.exitFullscreen().catch(() => {});
     onLeave();
@@ -561,8 +565,11 @@ function Call({ session, api, prefs, updatePrefs, onLeave, recap, connectionErro
   }
 
   function requestLeave() {
-    if (!ended && (host || prefs.confirmLeave)) setConfirmation(true);
-    else exit(false);
+    if (!ended && (host || prefs.confirmLeave)) {
+      setNextHost('');
+      setError('');
+      setConfirmation(true);
+    } else exit();
   }
 
   const handleShortcut = useEffectEvent(event => {
@@ -756,12 +763,28 @@ function Call({ session, api, prefs, updatePrefs, onLeave, recap, connectionErro
       <CallViewOptions prefs={prefs} updatePrefs={updatePrefs} />
       <div className="dialog-actions"><button className="button primary" onClick={() => setViewOptions(false)}>Done</button></div>
     </Dialog>}
-    {confirmation && <Dialog title="Leave the meeting?" close={() => setConfirmation(false)}>
+    {confirmation && <Dialog title="Leave the meeting?" close={() => { if (!exiting) setConfirmation(false); }}>
       {host && !ended && <p className="muted"><ShieldCheck size={16} /> Ending the meeting disconnects everyone and closes its invite.</p>}
       {host && (recording.state?.phase === 'active' || recording.file || recording.saving) && <p className="muted">Meetrix will save your local recording before you leave.</p>}
+      {host && !ended && coHosts.length > 0 && <p className="muted">If you leave, a connected co-host can take over after a reconnect window.</p>}
+      {hostCandidates.length > 0 && <form className="form" onSubmit={event => {
+        event.preventDefault();
+        if (selectedHost && !exiting) exit({ action: 'transfer-host', identity: selectedHost.identity, sid: selectedHost.sid });
+      }}>
+        <label>New host
+          <select value={selectedHost?.identity ?? ''} disabled={exiting} onChange={event => setNextHost(event.target.value)}>
+            <option disabled value="">Choose a participant</option>
+            {hostCandidates.map(participant => <option key={participant.identity} value={participant.identity}>
+              {participant.name || 'Signed-in participant'}
+            </option>)}
+          </select>
+        </label>
+        <button className="button primary" disabled={exiting || !selectedHost}>Assign host and leave</button>
+      </form>}
+      {error && <p className="error" role="alert">{error}</p>}
       <div className="dialog-actions">
-        <button className="button" disabled={exiting} onClick={() => exit(false)}>Leave room</button>
-        {host && !ended && <button className="button danger" disabled={exiting} onClick={() => exit(true)}>End for everyone</button>}
+        <button className="button" disabled={exiting} onClick={() => exit()}>Leave room</button>
+        {host && !ended && <button className="button danger" disabled={exiting} onClick={() => exit({ action: 'end' })}>End for everyone</button>}
       </div>
     </Dialog>}
   </main>;

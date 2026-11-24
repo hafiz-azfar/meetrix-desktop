@@ -81,6 +81,9 @@
 | F42-H1 | Hosts and co-hosts can visit rooms and return with media muted. Room help reaches the host during a visit. A co-host keeps their role after rooms close | API and four-client LiveKit smoke tests |
 | F42-N1 | A visitor needs the routing key and matching account. A stale LiveKit SID cannot inherit the co-host role. The host can revoke a visiting co-host | API tests |
 | F43-H1 | A moderator can move attendees between open breakout rooms and the main meeting while the call continues | API and four-client LiveKit smoke tests |
+| F44-H1 | The host can assign another signed-in participant from the leave dialog. The successor keeps the call open | Four-client LiveKit smoke test |
+| F45-H1 | The meeting keeps running after the host leaves. A connected co-host takes over after the grace period and can end the meeting | API and four-client LiveKit smoke tests |
+| F45-N1 | A reconnecting host, a room-service outage, a stale co-host SID, and an ordinary attendee do not trigger promotion. Presence checks follow a visiting host and role updates reach both rooms | API tests |
 | F12-P1 | 100-person load, 30-hour duration, and production availability | Deployment-scale verification |
 
 Run `npm test` for the API suite. The RTC tests use two isolated browser pages and a real loopback LiveKit server. The desktop test is aimed at the Windows development build.

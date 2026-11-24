@@ -1,6 +1,6 @@
 {
   "name": "meetrix-desktop",
-  "version": "0.1.22",
+  "version": "0.1.23",
   "private": true,
   "description": "Open-source meeting rooms for Windows and the web",
   "main": "desktop/main.cjs",

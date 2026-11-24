@@ -721,13 +721,35 @@ try {
   await delegate.getByRole('textbox', { name: 'Caption text' }).fill('The meeting continues with a new host.');
   await delegate.getByRole('button', { name: 'Send caption' }).click();
   await guest.locator('.caption-overlay').getByText('The meeting continues with a new host.').waitFor();
+  await delegate.getByRole('button', { name: 'Leave', exact: true }).click();
+  const leaveDialog = delegate.getByRole('dialog', { name: 'Leave the meeting?' });
+  const successor = leaveDialog.getByRole('combobox', { name: 'New host' });
+  await successor.waitFor();
+  assert.deepEqual(await successor.locator('option').allTextContents(), ['Choose a participant', 'Alex Morgan']);
+  await successor.selectOption({ label: 'Alex Morgan' });
+  await leaveDialog.screenshot({ path: resolve(results, 'meetrix-assign-host-and-leave.png') });
+  await delegate.getByRole('button', { name: 'Assign host and leave', exact: true }).click();
+  await delegate.getByRole('button', { name: 'New meeting', exact: true }).waitFor();
+  await host.getByText('You’re the host', { exact: true }).waitFor();
+
+  await delegate.goto(origin + '/join?m=' + id);
+  await delegate.getByLabel('Passcode (if required)', { exact: true }).fill('test passcode');
+  await delegate.getByRole('button', { name: 'Continue', exact: true }).click();
+  await delegate.getByRole('button', { name: 'Join now' }).click();
+  await host.getByRole('button', { name: 'People 4', exact: true }).waitFor();
+  host.once('dialog', dialog => dialog.accept());
+  await host.getByRole('button', { name: 'Make co-host: Design partner', exact: true }).click();
+  await roleStatus.waitFor();
   await host.getByRole('button', { name: 'Leave', exact: true }).click();
+  await host.getByRole('button', { name: 'Leave room', exact: true }).click();
   await host.getByRole('button', { name: 'New meeting', exact: true }).waitFor();
-  await delegate.getByText('You’re the host', { exact: true }).waitFor();
+  assert.equal(await delegate.getByText('You’re the host', { exact: true }).count(), 0);
+  await delegate.getByText('You’re the host', { exact: true }).waitFor({ timeout: 75000 });
+  await guest.getByRole('button', { name: 'People 3', exact: true }).waitFor();
   await delegate.getByRole('button', { name: 'Leave', exact: true }).click();
   await delegate.getByRole('button', { name: 'End for everyone' }).click();
   await guest.getByText('You are disconnected from this room.').waitFor();
-  console.log('Four-client LiveKit checks passed for breakout voice isolation, help requests, countdowns and selection, captions, annotations, call statistics, and readmission.');
+  console.log('Four-client LiveKit checks passed for moderator visits, breakout reassignment, host succession, explicit transfer on exit, captions, annotations, and readmission.');
 } finally {
   await browser?.close();
   backend?.stop();

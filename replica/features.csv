@@ -42,3 +42,5 @@ F40,Pro,Breakout microphone announcements,should,yes,yes,Live moderator audio to
 F41,Pro,Breakout requests for help,should,yes,partial,Participants request help and moderators can respond by announcement or mark the request resolved
 F42,Pro,Moderator visits during breakouts,should,yes,yes,Hosts and co-hosts visit open rooms and retain their approved role across media reconnects
 F43,Pro,Live reassignment between breakout rooms,should,yes,yes,Moderators can move an admitted attendee between rooms or the main meeting while rooms are open
+F44,Meetings,Assign a host and leave,should,yes,yes,Host can choose a connected signed-in attendee from the leave dialog in a standard meeting
+F45,Meetings,Automatic host succession,should,yes,partial,Standard meetings can promote an active co-host after a reconnect window. Promotion is limited to delegated participants
