@@ -19,6 +19,7 @@ try {
         const member = email === 'teammate@example.test';
         return { data: { accessToken: 'test-token', user: {
           id: member ? 'd338dd36-66ed-4dba-8f37-ddc3af85a041' : '4e5c7bb9-0218-4d57-b9c0-4ff45db24395',
+          email, emailVerified: true,
           profile: { name: member ? 'Test teammate' : 'Test organizer' },
         } } };
       },
@@ -258,6 +259,12 @@ try {
   const plan = owner.getByRole('dialog', { name: 'Prepare breakout rooms' });
   await plan.getByLabel('Room 1 name').fill('Research');
   await plan.getByLabel('Room 2 name').fill('Design');
+  await plan.getByText('Pre-assign participants', { exact: true }).click();
+  const roster = plan.getByLabel('Room 1 participant emails');
+  await roster.fill('teammate@example.test');
+  await roster.clear();
+  assert.ok(await roster.isVisible(), 'the roster editor stays open after clearing the last address');
+  await roster.fill('teammate@example.test');
   await plan.getByLabel('Let attendees choose their room').check();
   await plan.getByLabel('Close automatically after (minutes)').fill('10');
   await plan.getByRole('button', { name: 'Save breakout plan' }).click();
@@ -268,9 +275,22 @@ try {
   await owner.getByRole('button', { name: 'Load scheduled plan' }).click();
   assert.equal(await owner.getByLabel('Name for breakout room 1').inputValue(), 'Research');
   assert.equal(await owner.getByLabel('Close automatically after (minutes)').inputValue(), '10');
-  await owner.getByRole('button', { name: 'Open breakout rooms' }).click();
+  await owner.getByRole('button', { name: 'Open with scheduled assignments' }).click();
   await owner.getByRole('heading', { name: 'Design' }).waitFor();
+  await teammate.goto(new URL(invite, origin).href);
+  await teammate.getByRole('button', { name: 'Continue', exact: true }).click();
+  await teammate.getByRole('button', { name: 'Microphone off', exact: true }).click();
+  await teammate.getByRole('button', { name: 'Camera off', exact: true }).click();
+  await teammate.getByRole('button', { name: 'Join now', exact: true }).click();
+  await teammate.getByText('The host will admit you from the waiting room.').waitFor();
+  await owner.getByRole('button', { name: /^People\b/ }).click();
+  await owner.getByRole('button', { name: 'Admit', exact: true }).click();
+  await teammate.getByText('Breakout · Research', { exact: true }).waitFor();
+  await teammate.getByRole('button', { name: 'Unmute', exact: true }).waitFor();
+  assert.equal(await teammate.getByRole('button', { name: 'Camera', exact: true }).getAttribute('aria-pressed'), 'false');
+  await owner.getByRole('button', { name: 'Breakouts', exact: true }).click();
   await owner.getByRole('button', { name: 'Close all rooms' }).click();
+  await teammate.getByText('Returned to the main meeting. Your microphone and camera are off.', { exact: true }).waitFor();
   await owner.bringToFront();
   try { await owner.getByText('Connected', { exact: true }).waitFor({ timeout: 45_000 }); }
   catch (failure) {

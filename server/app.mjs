@@ -17,6 +17,7 @@ import { calendarFeedRoutes } from './calendar-feed.mjs';
 import { bookingRoutes } from './bookings.mjs';
 import { registerPersonalWorkspace } from './personal-workspace.mjs';
 import { breakoutStore } from './breakouts.mjs';
+import { breakoutEmailKey } from './breakout-identity.mjs';
 import { registerBreakoutPlans } from './breakout-plans.mjs';
 import { registerMeetingSeries } from './meeting-series.mjs';
 import { cloudCommand, cloudRecordingId, createCloudRecording } from './cloud-recording.mjs';
@@ -50,6 +51,7 @@ const routingRequest = z.object({
   breakoutRoomId: z.string().regex(/^breakout_[A-Za-z0-9_-]{16}$/).nullable().optional(),
 }).strict();
 const breakoutCommand = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('open-plan') }).strict(),
   z.object({ action: z.literal('open'), selfSelect: z.boolean().default(false),
     durationSeconds: z.number().int().min(30).max(7200).optional(), rooms: z.array(z.object({
     name: z.string().trim().min(1).max(40), members: z.array(participantIdentity).max(99),
@@ -129,6 +131,7 @@ export function createApp(options, dependencies = {}) {
   const breakouts = breakoutStore(db);
   const settings = insforgeSettings(options.insforgeUrl, options.insforgeAnonKey);
   const scope = authenticationScope(settings.insforgeUrl);
+  const emailKey = breakoutEmailKey(db, scope);
   const rooms = dependencies.rooms ?? (livekitKey && new RoomServiceClient(
     livekitUrl.replace(/^ws/, 'http'), livekitKey, livekitSecret, { requestTimeout: 7 },
   ));
@@ -145,6 +148,7 @@ export function createApp(options, dependencies = {}) {
   const queues = new Map();
   const findMeeting = db.prepare('SELECT * FROM meetings WHERE id = ?');
   const findGuest = db.prepare('SELECT * FROM attendance WHERE meeting = ? AND identity = ?');
+  const saveBreakoutEmailKey = db.prepare('UPDATE attendance SET breakout_email_key = ? WHERE meeting = ? AND identity = ?');
   const findCoHost = db.prepare('SELECT sid FROM meeting_cohosts WHERE meeting = ? AND identity = ?');
   const listCoHosts = db.prepare('SELECT identity, sid FROM meeting_cohosts WHERE meeting = ?');
   const grantCoHost = db.prepare(`INSERT INTO meeting_cohosts(meeting, identity, sid) VALUES(?, ?, ?)
@@ -231,8 +235,8 @@ export function createApp(options, dependencies = {}) {
     request: dependencies.outlookRequest, error: (status, message) => new RequestError(status, message) });
   msOutlook?.public(api);
   const desktopAuth = createDesktopAuth({ db, origin, scope, limitOptions });
-  const auth = createInsforgeAuth({ db, origin, ...settings, sessions: desktopAuth, limitOptions, createAuth: dependencies.createAuth });
-  const authenticate = dependencies.authenticate ?? auth.currentIdentity;
+  const auth = createInsforgeAuth({ db, origin, ...settings, sessions: desktopAuth, limitOptions, createAuth: dependencies.createAuth, emailKey });
+  const authenticate = dependencies.authenticate ?? auth.currentAccount;
   api.use('/auth', auth.router);
   api.use('/desktop-auth', desktopAuth.router);
   api.get('/recording-template', rateLimit({ ...limitOptions, limit: 300 }), (req, res) => {
@@ -264,6 +268,7 @@ export function createApp(options, dependencies = {}) {
       if (!identity || current.encrypted || (identity !== activeHost(current) && participant?.decision !== 'admitted')) {
         throw new RequestError(403, 'Your meeting session is no longer active.');
       }
+      if (input.breakoutRoomId === undefined) assignScheduledBreakout(current, participant);
       const target = currentLocation(current.id, identity);
       const placementEpoch = participant?.placement_epoch ?? 0;
       if (input.breakoutRoomId !== undefined) {
@@ -285,7 +290,7 @@ export function createApp(options, dependencies = {}) {
     });
     res.json(grant);
   });
-  async function bearerIdentity(req) {
+  async function bearerAccount(req) {
     const token = /^Bearer ([A-Za-z0-9_.-]{1,4096})$/.exec(req.get('authorization') || '')?.[1];
     if (!token) throw new RequestError(401, 'Sign in to continue.');
     try { return await authenticate(token); }
@@ -293,7 +298,9 @@ export function createApp(options, dependencies = {}) {
   }
   api.use(async (req, _res, next) => {
     if (req.get('authorization')) {
-      req.identity = await bearerIdentity(req);
+      const account = await bearerAccount(req);
+      req.identity = typeof account === 'string' ? account : account.identity;
+      req.breakoutEmailKey = account.breakout_email_key ?? null;
     } else {
       const session = desktopAuth.session(req);
       if (!session) throw new RequestError(401, 'Sign in to continue.');
@@ -301,6 +308,7 @@ export function createApp(options, dependencies = {}) {
         throw new RequestError(403, 'This origin is not allowed.');
       }
       req.identity = session.identity;
+      req.breakoutEmailKey = session.breakout_email_key;
     }
     next();
   });
@@ -547,7 +555,15 @@ export function createApp(options, dependencies = {}) {
   const breakoutPlan = registerBreakoutPlans(api, { db, byIdentity, meetingFor, serial,
     error: (status, message) => new RequestError(status, message) });
 
-  async function connectMeeting(initial, identity, input, accountless = false) {
+  function assignScheduledBreakout(meeting, guest) {
+    if (!meeting.encrypted && guest?.decision === 'admitted' && guest.breakout_email_key &&
+        guest.identity !== activeHost(meeting) && !findCoHost.get(meeting.id, guest.identity) &&
+        (!breakouts.closesAt(meeting.id) || breakouts.closesAt(meeting.id) > Date.now())) {
+      breakouts.assignScheduled(meeting.id, guest.identity, guest.breakout_email_key);
+    }
+  }
+
+  async function connectMeeting(initial, identity, input, accountless = false, verifiedEmailKey = null) {
     const verified = initial.passcode && !findGuest.get(initial.id, identity)
       ? await checkPasscode(input.passcode, initial.passcode) : true;
     return serial(initial.id, async () => {
@@ -567,8 +583,14 @@ export function createApp(options, dependencies = {}) {
             .run(current.id, identity, input.name, current.lobby ? 'pending' : 'admitted', Date.now());
           guest = findGuest.get(current.id, identity);
         }
+        if (!accountless && !current.encrypted && guest.breakout_email_key !== verifiedEmailKey &&
+            breakoutPlan(current.id)?.assignments?.length) {
+          saveBreakoutEmailKey.run(verifiedEmailKey, current.id, identity);
+          guest.breakout_email_key = verifiedEmailKey;
+        }
         if (!current.opened_at || guest.decision !== 'admitted') return { state: 'waiting', hostPresent: !!current.opened_at };
         if (current.encrypted && !input.keyReady) return { state: 'key-required' };
+        assignScheduledBreakout(current, guest);
       } else if (!current.opened_at) {
         await ensureMediaRoom(current.id);
         start.run(Date.now(), current.id);
@@ -593,7 +615,7 @@ export function createApp(options, dependencies = {}) {
   }
 
   api.post('/meetings/:id/connect', byIdentity(34), async (req, res) => {
-    res.json(await connectMeeting(meetingFor(req), req.identity, join.parse(req.body)));
+    res.json(await connectMeeting(meetingFor(req), req.identity, join.parse(req.body), false, req.breakoutEmailKey));
   });
 
   api.get('/meetings/:id/cloud-recording', (req, res) => {
@@ -660,8 +682,30 @@ export function createApp(options, dependencies = {}) {
   api.get('/meetings/:id/breakouts', async (req, res) => {
     const meeting = meetingFor(req);
     await requireModerator(meeting, req.identity);
-    res.json({ ...breakoutView(meeting.id), plan: meeting.encrypted || meetingEnded(meeting) ? null : breakoutPlan(meeting.id) });
+    const saved = meeting.encrypted || meetingEnded(meeting) ? null : breakoutPlan(meeting.id);
+    const plan = saved ? { names: saved.names, selfSelect: saved.selfSelect, durationMinutes: saved.durationMinutes } : null;
+    res.json({ ...breakoutView(meeting.id), plan, ...(saved?.assignments?.length ? { preassignedCount: saved.assignments.length } : {}) });
   });
+
+  async function preparedBreakouts(meeting) {
+    const saved = breakoutPlan(meeting.id);
+    if (!saved?.assignments?.length) throw new RequestError(409, 'There are no scheduled participant assignments for this meeting.');
+    const rooms = saved.names.map(name => ({ name, members: [] }));
+    const scheduled = saved.assignments.map(item => ({ key: emailKey(item.email), room: item.room, claimed: false }));
+    const byEmail = new Map(scheduled.map(item => [item.key, item]));
+    const participants = await media(client => client.listParticipants(meeting.id));
+    for (const participant of participants) {
+      if (participant.state !== ParticipantInfo_State.ACTIVE || participant.identity === activeHost(meeting) ||
+          findCoHost.get(meeting.id, participant.identity)?.sid === participant.sid) continue;
+      const guest = findGuest.get(meeting.id, participant.identity);
+      if (guest?.decision !== 'admitted') continue;
+      const entry = byEmail.get(guest.breakout_email_key);
+      if (!entry || entry.claimed) continue;
+      rooms[entry.room].members.push(participant.identity);
+      entry.claimed = true;
+    }
+    return { rooms, selfSelect: saved.selfSelect, durationSeconds: saved.durationMinutes ? saved.durationMinutes * 60 : null, scheduled };
+  }
 
   api.post('/meetings/:id/breakouts', byIdentity(20), async (req, res) => {
     const command = breakoutCommand.parse(req.body);
@@ -692,9 +736,10 @@ export function createApp(options, dependencies = {}) {
       } else {
         if (!rooms) throw new RequestError(503, 'This server needs LiveKit configuration.');
         if (existing.length) throw new RequestError(409, 'Close the current breakout rooms before opening another set.');
-        const identities = command.rooms.flatMap(room => room.members);
-        const names = new Set(command.rooms.map(room => room.name.toLowerCase()));
-        if (names.size !== command.rooms.length || (!command.selfSelect && !identities.length) ||
+        const plan = command.action === 'open-plan' ? await preparedBreakouts(current) : command;
+        const identities = plan.rooms.flatMap(room => room.members);
+        const names = new Set(plan.rooms.map(room => room.name.toLowerCase()));
+        if (names.size !== plan.rooms.length || (!plan.selfSelect && !identities.length && !plan.scheduled?.length) ||
             identities.length > 99 || new Set(identities).size !== identities.length) {
           throw new RequestError(400, 'Use distinct room names and assign each participant to only one room.');
         }
@@ -705,10 +750,10 @@ export function createApp(options, dependencies = {}) {
           }
         }
         await cloud?.stopMeeting(current, 'Breakout rooms opened.');
-        const closesAt = command.durationSeconds ? Date.now() + command.durationSeconds * 1000 : null;
-        breakouts.open(current.id, command.rooms, command.selfSelect, closesAt);
+        const closesAt = plan.durationSeconds ? Date.now() + plan.durationSeconds * 1000 : null;
+        breakouts.open(current.id, plan.rooms, plan.selfSelect, closesAt, plan.scheduled);
         log.run(current.id, req.identity, 'open-breakouts', null, Date.now());
-        await signalPlacement(current.id, command.selfSelect ? undefined : identities);
+        if (plan.selfSelect || identities.length) await signalPlacement(current.id, plan.selfSelect ? undefined : identities);
       }
       return breakoutView(current.id);
     });

@@ -284,6 +284,11 @@ export function openDatabase(filename) {
   const attendanceColumns = new Set(db.prepare('PRAGMA table_info(attendance)').all().map(column => column.name));
   if (!attendanceColumns.has('placement_epoch')) db.exec('ALTER TABLE attendance ADD COLUMN placement_epoch INTEGER NOT NULL DEFAULT 0');
   if (!attendanceColumns.has('waiting_evicting')) db.exec('ALTER TABLE attendance ADD COLUMN waiting_evicting INTEGER NOT NULL DEFAULT 0');
+  for (const table of ['desktop_sign_ins', 'desktop_sessions', 'attendance']) {
+    if (!db.prepare(`PRAGMA table_info(${table})`).all().some(column => column.name === 'breakout_email_key')) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN breakout_email_key TEXT`);
+    }
+  }
   if (!db.prepare('PRAGMA table_info(team_messages)').all().some(column => column.name === 'reply_to')) {
     db.exec('ALTER TABLE team_messages ADD COLUMN reply_to INTEGER REFERENCES team_messages(id) ON DELETE CASCADE');
   }
@@ -292,6 +297,17 @@ export function openDatabase(filename) {
     CREATE TABLE IF NOT EXISTS meeting_breakout_plans (
       meeting TEXT PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,
       plan TEXT NOT NULL
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS workspace_secrets (
+      name TEXT PRIMARY KEY,
+      value BLOB NOT NULL
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS breakout_scheduled_routes (
+      meeting TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+      room TEXT NOT NULL REFERENCES breakout_rooms(id) ON DELETE CASCADE,
+      email_key TEXT NOT NULL,
+      claimed INTEGER NOT NULL CHECK(claimed IN (0, 1)),
+      PRIMARY KEY (meeting, email_key)
     ) STRICT;
     CREATE INDEX IF NOT EXISTS team_message_threads ON team_messages(channel, reply_to, id DESC);
     CREATE INDEX IF NOT EXISTS team_message_replies ON team_messages(reply_to) WHERE reply_to IS NOT NULL;

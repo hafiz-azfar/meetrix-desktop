@@ -74,6 +74,8 @@
 | F37-H1 | Series changes preserve invite URLs and calendar UIDs. Canceling upcoming meetings leaves an opened meeting available. Stale writes are rejected | API, schedule unit, and workspace browser smoke tests |
 | F38-H1 | The organizer prepares rooms for a standard meeting and loads the plan after starting. Other accounts cannot read or change the scheduled plan | API and workspace browser smoke tests |
 | F39-H1 | Audio settings records and plays a local sample. Ending capture stops the input track and discarding the sample clears playback | Workspace browser smoke test |
+| F38-H2 | Verified accounts enter their pre-assigned rooms only after admission. Late arrivals are matched and raw rosters are private | API and two-client LiveKit workspace smoke tests |
+| F32-H3 | Undo and redo change the displayed annotations on presenter and attendee clients. Attendees cannot edit the history | Multi-client LiveKit smoke test |
 | F12-P1 | 100-person load, 30-hour duration, and production availability | Deployment-scale verification |
 
 Run `npm test` for the API suite. The RTC tests use two isolated browser pages and a real loopback LiveKit server. The desktop test is aimed at the Windows development build.

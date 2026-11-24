@@ -43,6 +43,11 @@ export function breakoutStore(db) {
     )
   `);
   const dropMeetingKeys = db.prepare('DELETE FROM meeting_routing_keys WHERE meeting = ?');
+  const saveScheduled = db.prepare('INSERT INTO breakout_scheduled_routes(meeting, room, email_key, claimed) VALUES(?, ?, ?, ?)');
+  const pendingScheduled = db.prepare(`SELECT s.room FROM breakout_scheduled_routes s JOIN breakout_rooms room ON room.id = s.room
+    WHERE s.meeting = ? AND s.email_key = ? AND s.claimed = 0 AND room.closed_at IS NULL`);
+  const claimScheduled = db.prepare('UPDATE breakout_scheduled_routes SET claimed = 1 WHERE meeting = ? AND email_key = ?');
+  const clearScheduled = db.prepare('DELETE FROM breakout_scheduled_routes WHERE meeting = ?');
 
   function transaction(operation) {
     db.exec('BEGIN IMMEDIATE');
@@ -67,7 +72,7 @@ export function breakoutStore(db) {
     closesAt(meeting) { return readDeadline.get(meeting)?.closesAt ?? null; },
     scheduleClose(meeting, closesAt) { saveDeadline.run(meeting, closesAt); },
     due(now) { return dueDeadlines.all(now); },
-    open(meeting, plan, selfSelect, closesAt) {
+    open(meeting, plan, selfSelect, closesAt, scheduled = []) {
       transaction(() => {
         if (selfSelect) enableSelection.run(meeting);
         if (closesAt != null) saveDeadline.run(meeting, closesAt);
@@ -75,7 +80,18 @@ export function breakoutStore(db) {
           const id = 'breakout_' + randomBytes(12).toString('base64url');
           insertRoom.run(id, meeting, room.name, position);
           for (const identity of room.members) insertMember.run(id, identity);
+          for (const entry of scheduled.filter(item => item.room === position)) {
+            saveScheduled.run(meeting, id, entry.key, Number(entry.claimed));
+          }
         }
+      });
+    },
+    assignScheduled(meeting, identity, emailKey) {
+      const scheduled = emailKey && pendingScheduled.get(meeting, emailKey);
+      if (!scheduled) return;
+      transaction(() => {
+        claimScheduled.run(meeting, emailKey);
+        if (!assigned.get(meeting, identity)) insertMember.run(scheduled.room, identity);
       });
     },
     select(meeting, identity, room) {
@@ -89,6 +105,7 @@ export function breakoutStore(db) {
         const result = closeRooms.run(Date.now(), meeting).changes;
         disableSelection.run(meeting);
         clearDeadline.run(meeting);
+        clearScheduled.run(meeting);
         return result;
       });
     },

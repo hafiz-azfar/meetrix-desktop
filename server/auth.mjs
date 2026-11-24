@@ -32,10 +32,11 @@ export function authenticationScope(insforgeUrl) {
   return 'insforge_' + createHash('sha256').update(insforgeUrl).digest('hex').slice(0, 20) + '_';
 }
 
-function accountOf(user, scope) {
+function accountOf(user, scope, emailKey) {
   if (!user || typeof user.id !== 'string' || !/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(user.id)) return null;
   const name = [user.profile?.name, user.name].find(value => typeof value === 'string' && value.trim());
-  return { identity: scope + user.id.toLowerCase(), name: name?.trim().slice(0, 60) || 'Participant' };
+  return { identity: scope + user.id.toLowerCase(), name: name?.trim().slice(0, 60) || 'Participant',
+    breakout_email_key: user.emailVerified === true ? emailKey?.(user.email) ?? null : null };
 }
 
 function returnPath(input, origin) {
@@ -51,7 +52,7 @@ function returnPath(input, origin) {
   return '/';
 }
 
-export function createInsforgeAuth({ db, origin, insforgeUrl, insforgeAnonKey, sessions, limitOptions, createAuth }) {
+export function createInsforgeAuth({ db, origin, insforgeUrl, insforgeAnonKey, sessions, limitOptions, createAuth, emailKey }) {
   const router = Router();
   const scope = authenticationScope(insforgeUrl);
   const client = createAuth ?? (accessToken => createClient({
@@ -131,7 +132,7 @@ export function createInsforgeAuth({ db, origin, insforgeUrl, insforgeAnonKey, s
     };
     if (typeof code !== 'string' || code.length < 1 || code.length > 1024) return fail();
     const { data, error } = await client().exchangeOAuthCode(code, flow.verifier);
-    const account = accountOf(data?.user, scope);
+    const account = accountOf(data?.user, scope, emailKey);
     if (error || !account || !data.accessToken) return fail();
     sessions.issue(req, res, account, 'browser');
     res.redirect(303, target.pathname + target.search);
@@ -147,7 +148,7 @@ export function createInsforgeAuth({ db, origin, insforgeUrl, insforgeAnonKey, s
   router.post('/email/verify', restrict(15), async (req, res) => {
     const input = verify.parse(req.body);
     const { data, error } = await client().verifyOtp(input);
-    const account = accountOf(data?.user, scope);
+    const account = accountOf(data?.user, scope, emailKey);
     if (error || !account || !data.accessToken) return res.status(401).json({ error: 'The sign-in code is invalid or expired.' });
     sessions.issue(req, res, account, 'browser');
     res.json({ ok: true });
@@ -156,18 +157,18 @@ export function createInsforgeAuth({ db, origin, insforgeUrl, insforgeAnonKey, s
   router.post('/email/password', restrict(12), async (req, res) => {
     const input = login.parse(req.body);
     const { data, error } = await client().signInWithPassword(input);
-    const account = accountOf(data?.user, scope);
+    const account = accountOf(data?.user, scope, emailKey);
     if (error || !account || !data.accessToken) return res.status(401).json({ error: 'The email or password could not be verified.' });
     sessions.issue(req, res, account, 'browser');
     res.json({ ok: true });
   });
 
-  async function currentIdentity(token) {
+  async function currentAccount(token) {
     const { data, error } = await client(token).getCurrentUser();
-    const account = accountOf(data?.user, scope);
+    const account = accountOf(data?.user, scope, emailKey);
     if (error || !account) throw new Error('Session could not be verified.');
-    return account.identity;
+    return account;
   }
 
-  return { router, currentIdentity, sweep: () => expire.run(Date.now()) };
+  return { router, currentAccount, sweep: () => expire.run(Date.now()) };
 }

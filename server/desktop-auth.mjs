@@ -34,8 +34,8 @@ export function createDesktopAuth({ db, origin, scope, limitOptions }) {
   const cookieName = secure ? '__Host-meetrix-auth' : 'meetrix_auth';
   const cookieOptions = { httpOnly: true, sameSite: 'strict', secure, path: '/' };
   const getRequest = db.prepare('SELECT * FROM desktop_sign_ins WHERE id = ? AND expires_at > ?');
-  const getSession = db.prepare('SELECT identity, name, expires_at, kind FROM desktop_sessions WHERE credential = ? AND expires_at > ?');
-  const login = db.prepare('INSERT INTO desktop_sessions(credential, identity, name, expires_at, kind) VALUES (?, ?, ?, ?, ?)');
+  const getSession = db.prepare('SELECT identity, name, expires_at, kind, breakout_email_key FROM desktop_sessions WHERE credential = ? AND expires_at > ?');
+  const login = db.prepare('INSERT INTO desktop_sessions(credential, identity, name, expires_at, kind, breakout_email_key) VALUES (?, ?, ?, ?, ?, ?)');
   const deleteRequest = db.prepare('DELETE FROM desktop_sign_ins WHERE id = ?');
   const revoke = db.prepare('DELETE FROM desktop_sessions WHERE credential = ?');
   const expireRequests = db.prepare('DELETE FROM desktop_sign_ins WHERE expires_at <= ?');
@@ -72,7 +72,7 @@ export function createDesktopAuth({ db, origin, scope, limitOptions }) {
     transaction(() => {
       if (consumedRequest) deleteRequest.run(consumedRequest);
       if (prior) revoke.run(prior);
-      login.run(digest(token), account.identity, account.name, Date.now() + sessionLifetime, kind);
+      login.run(digest(token), account.identity, account.name, Date.now() + sessionLifetime, kind, account.breakout_email_key ?? null);
     });
     res.cookie(cookieName, token, { ...cookieOptions, maxAge: sessionLifetime });
   }
@@ -121,7 +121,8 @@ export function createDesktopAuth({ db, origin, scope, limitOptions }) {
       db.prepare('UPDATE desktop_sign_ins SET attempts = attempts + 1 WHERE id = ?').run(row.id);
       return fail(res, 403, 'The code does not match the one shown in Meetrix.');
     }
-    db.prepare('UPDATE desktop_sign_ins SET identity = ?, name = ? WHERE id = ?').run(browser.identity, browser.name, row.id);
+    db.prepare('UPDATE desktop_sign_ins SET identity = ?, name = ?, breakout_email_key = ? WHERE id = ?')
+      .run(browser.identity, browser.name, browser.breakout_email_key, row.id);
     res.json({ ok: true });
   });
 

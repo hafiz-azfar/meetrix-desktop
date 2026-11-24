@@ -12,7 +12,7 @@ const insforgeUrl = 'https://auth.meetrix.test';
 const livekitKey = 'test-api-key';
 const livekitSecret = 'not-a-real-secret-at-least-32-bytes';
 
-async function fixture(t) {
+async function fixture(t, authFixture) {
   const calls = [];
   const livePeople = new Map();
   const failedRemovals = new Set();
@@ -34,7 +34,7 @@ async function fixture(t) {
   const { app, close } = createApp({
     origin, insforgeUrl, livekitKey, livekitSecret,
     livekitUrl: 'wss://livekit.meetrix.test', databasePath: ':memory:',
-  }, { rooms, authenticate: async token => {
+  }, { rooms, createAuth: authFixture, authenticate: async token => {
     if (!['owner', 'guest', 'stranger', 'attendee'].includes(token)) throw Error('Bad session');
     return token;
   } });
@@ -45,10 +45,10 @@ async function fixture(t) {
     close();
   });
   const root = 'http://127.0.0.1:' + server.address().port + '/api';
-  function request(path, { token = 'owner', method = 'GET', body, userOrigin = origin, contentType = 'application/json' } = {}) {
+  function request(path, { token = 'owner', cookie, method = 'GET', body, userOrigin = origin, contentType = 'application/json' } = {}) {
     return fetch(root + path, {
       method,
-      headers: { Origin: userOrigin, ...(token ? { Authorization: 'Bearer ' + token } : {}),
+      headers: { Origin: userOrigin, ...(cookie ? { Cookie: cookie } : token ? { Authorization: 'Bearer ' + token } : {}),
         ...(body ? { 'Content-Type': contentType } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
@@ -198,6 +198,71 @@ test('scheduled breakout plans are private and load after starting a standard me
   assert.ok(opened.json.closesAt > Date.now());
   const encrypted = (await create({ encrypted: true })).json;
   assert.equal((await api('/meetings/' + encrypted.id + '/breakout-plan', { method: 'PATCH', body: { plan } })).status, 404);
+});
+
+test('scheduled breakout rosters match verified sign-ins only after normal admission', async t => {
+  const addresses = {
+    'present@example.test': { id: '4e5c7bb9-0218-4d57-b9c0-4ff45db24395', emailVerified: true },
+    'later@example.test': { id: 'd338dd36-66ed-4dba-8f37-ddc3af85a041', emailVerified: true },
+    'unverified@example.test': { id: '454f7cfb-ced7-47e0-a76b-005b149c2323', emailVerified: false },
+  };
+  const { api, create, connect, moderate, livePeople } = await fixture(t, () => ({
+    async signInWithPassword({ email }) {
+      return { data: { accessToken: 'fixture-token', user: { ...addresses[email], email } } };
+    },
+  }));
+  async function signIn(email) {
+    const reply = await api.request('/auth/email/password', { method: 'POST', body: { email, password: 'fixture-password' } });
+    assert.equal(reply.status, 200);
+    const cookie = reply.headers.get('set-cookie').split(';')[0];
+    const session = (await api('/desktop-auth/session', { cookie })).json.user;
+    return { cookie, identity: session.id };
+  }
+  const [present, later, unverified] = await Promise.all(Object.keys(addresses).map(signIn));
+  const meeting = (await create({})).json;
+  const uri = '/meetings/' + meeting.id;
+  const plan = { names: ['Research', 'Design'], selfSelect: true, durationMinutes: null, assignments: [
+    { email: 'Present@example.test', room: 0 }, { email: 'later@example.test', room: 1 }, { email: 'unverified@example.test', room: 1 },
+  ] };
+  const invalid = await api(uri + '/breakout-plan', { method: 'PATCH', body: { plan: {
+    ...plan, assignments: [...plan.assignments, { email: 'PRESENT@example.test', room: 1 }],
+  } } });
+  assert.equal(invalid.status, 400);
+  assert.equal((await api(uri + '/breakout-plan', { method: 'PATCH', body: { plan } })).status, 200);
+  assert.equal((await connect(meeting.id, 'owner')).status, 200);
+  const request = person => api(uri + '/connect', { cookie: person.cookie, method: 'POST', body: { name: 'Attendee' } });
+  const admit = person => moderate(meeting.id, { action: 'decide', identity: person.identity, admit: true });
+  assert.equal((await request(present)).json.state, 'waiting');
+  await admit(present);
+  const presentGrant = (await request(present)).json;
+  assert.equal(presentGrant.roomId, meeting.id);
+  livePeople.set(present.identity, { identity: present.identity, sid: 'PA_present', state: ParticipantInfo_State.ACTIVE, tracks: [] });
+  assert.equal((await request(later)).json.state, 'waiting');
+  const tools = (await api(uri + '/breakouts')).json;
+  assert.equal(tools.preassignedCount, 3);
+  assert.ok(!JSON.stringify(tools).includes('@example.test'));
+  const opened = await api(uri + '/breakouts', { method: 'POST', body: { action: 'open-plan' } });
+  assert.equal(opened.status, 200);
+  assert.equal(opened.json.rooms[0].members[0].identity, present.identity);
+  assert.deepEqual(opened.json.rooms[1].members, []);
+  assert.equal((await request(later)).json.state, 'waiting');
+  await admit(later);
+  const lateGrant = (await request(later)).json;
+  assert.equal(lateGrant.roomId, opened.json.rooms[1].id);
+  const claims = await new TokenVerifier(livekitKey, livekitSecret).verify(lateGrant.token);
+  assert.equal(claims.video.room, opened.json.rooms[1].id);
+  const move = await api(uri + '/placement', { method: 'POST', body: { key: presentGrant.routingKey, roomId: meeting.id } });
+  assert.equal(move.json.roomId, opened.json.rooms[0].id);
+  await request(unverified);
+  await admit(unverified);
+  assert.equal((await request(unverified)).json.roomId, meeting.id);
+  const leave = await api(uri + '/placement', { method: 'POST', body: {
+    key: lateGrant.routingKey, roomId: lateGrant.roomId, breakoutRoomId: null,
+  } });
+  assert.equal(leave.status, 200);
+  assert.equal((await request(later)).json.roomId, meeting.id, 'a participant can keep their own room choice');
+  await api(uri + '/breakouts', { method: 'POST', body: { action: 'close' } });
+  assert.equal((await request(present)).json.roomId, meeting.id);
 });
 
 test('personal workspace keeps items private and rejects stale saves and deletes', async t => {

@@ -197,7 +197,9 @@ function Preflight({ target, prefs, updatePrefs, api, name, close, onConnected, 
           method: 'POST', body: { name, ...(guest ? { proof: target.proof } : {}), ...(validRoomKey(roomKey) ? { keyReady: true } : {}), ...(target.passcode ? { passcode: target.passcode } : {}) },
         });
         if (cancelled) return;
-        if (result.state === 'ready') onConnected({ ...result, media: { camera, microphone }, ...(result.meeting.encrypted ? { roomKey } : {}) });
+        if (result.state === 'ready') onConnected({ ...result,
+          media: result.breakoutName ? { camera: false, microphone: false } : { camera, microphone },
+          ...(result.meeting.encrypted ? { roomKey } : {}) });
         else if (result.state === 'key-required') { setNeedsKey(true); setPhase('preview'); }
         else {
           setPhase(result.hostPresent ? 'waiting' : 'host-pending');

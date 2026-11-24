@@ -1,7 +1,7 @@
 import React, { useEffect, useEffectEvent, useRef, useState } from 'react';
 import { VideoTrack } from '@livekit/components-react';
 import { ConnectionState, RoomEvent } from 'livekit-client';
-import { Eraser, Pencil } from 'lucide-react';
+import { Eraser, Pencil, Redo2, Undo2 } from 'lucide-react';
 
 const topic = 'meetrix.screen-annotations';
 const encoder = new TextEncoder();
@@ -37,8 +37,10 @@ function useAnnotations(room, share) {
   const [state, setState] = useState({ revision: 0, round: 0, allowed: false });
   const [strokes, setStrokes] = useState([]);
   const [error, setError] = useState('');
+  const [canRedo, setCanRedo] = useState(false);
   const policy = useRef(state);
   const history = useRef([]);
+  const undone = useRef([]);
   const sequence = useRef(0);
   const lastRequest = useRef(new Map());
   const lastStroke = useRef(new Map());
@@ -70,13 +72,13 @@ function useAnnotations(room, share) {
   async function relayStroke(stroke) {
     const { color, points, tool } = stroke;
     const accepted = { color, points, tool, text: tool === 'text' ? stroke.text : undefined, sequence: ++sequence.current };
+    undone.current = [];
+    setCanRedo(false);
     mergeStrokes([accepted]);
     await publish({ type: 'ink', round: policy.current.round, strokes: [accepted] });
   }
 
-  async function synchronize(recipient) {
-    const current = policy.current;
-    const strokesAtRequest = history.current;
+  async function synchronize(recipient, current = policy.current, strokesAtRequest = history.current) {
     await publish({ type: 'state', ...current }, recipient);
     for (let start = 0; start < strokesAtRequest.length; start += batchSize) {
       await publish({ type: 'ink', round: current.round, strokes: strokesAtRequest.slice(start, start + batchSize) }, recipient);
@@ -154,6 +156,29 @@ function useAnnotations(room, share) {
     catch { setError('Could not update the shared annotations.'); }
   }
 
+  async function editHistory(action) {
+    if (!isPresenter || room.state !== ConnectionState.Connected) return;
+    const current = history.current;
+    let remaining;
+    if (action === 'undo' && current.length) {
+      undone.current.push(current.at(-1));
+      remaining = current.slice(0, -1);
+    } else if (action === 'redo' && undone.current.length) {
+      remaining = [...current, undone.current.pop()];
+    } else if (action === 'clear') {
+      remaining = [];
+      undone.current = [];
+    } else return;
+
+    setCanRedo(undone.current.length > 0);
+    setError('');
+    const next = { ...policy.current, round: policy.current.round + 1, revision: policy.current.revision + 1 };
+    applyState(next);
+    replaceStrokes(remaining);
+    try { await synchronize(undefined, next, remaining); }
+    catch { setError('Could not update the shared annotations.'); }
+  }
+
   async function draw(stroke) {
     if (room.state !== ConnectionState.Connected) return;
     setError('');
@@ -165,7 +190,7 @@ function useAnnotations(room, share) {
     } catch { setError('Could not send the annotation.'); }
   }
 
-  return { isPresenter, canDraw: isPresenter || state.allowed, state, draw, change, strokes, error };
+  return { isPresenter, canDraw: isPresenter || state.allowed, state, draw, change, strokes, canRedo, editHistory, error };
 }
 
 function containedVideo(video) {
@@ -218,7 +243,7 @@ function paintAnnotation(context, annotation, width, height) {
 }
 
 export function ScreenPresentation({ room, share, withSound, online }) {
-  const { isPresenter, canDraw, state, draw, change, strokes, error } = useAnnotations(room, share);
+  const { isPresenter, canDraw, state, draw, change, strokes, canRedo, editHistory, error } = useAnnotations(room, share);
   const [drawing, setDrawing] = useState(false);
   const [color, setColor] = useState('amber');
   const [tool, setTool] = useState('pen');
@@ -355,9 +380,13 @@ export function ScreenPresentation({ room, share, withSound, online }) {
         style={{ '--ink': ink }} onClick={() => setColor(name)} />)}
       {isPresenter && <button type="button" className="button small" aria-pressed={state.allowed}
         onClick={() => change({ allowed: !state.allowed })}>Allow attendee drawing</button>}
+      {isPresenter && strokes.length > 0 && <button type="button" className="icon-button" aria-label="Undo annotation"
+        title="Undo annotation" onClick={() => editHistory('undo')}><Undo2 size={17} /></button>}
+      {isPresenter && canRedo && <button type="button" className="icon-button" aria-label="Redo annotation"
+        title="Redo annotation" onClick={() => editHistory('redo')}><Redo2 size={17} /></button>}
       {isPresenter && strokes.length > 0 && <button type="button" className="button small" onClick={saveSnapshot}>Save annotated image</button>}
       {isPresenter && strokes.length > 0 && <button type="button" className="icon-button" aria-label="Clear annotations"
-        title="Clear annotations" onClick={() => change({ round: state.round + 1 })}><Eraser size={17} /></button>}
+        title="Clear annotations" onClick={() => editHistory('clear')}><Eraser size={17} /></button>}
     </div>}
     {(error || saveError) && <p className="share-annotation-error" role="alert">{error || saveError}</p>}
   </div>;

@@ -11,7 +11,8 @@ const origin = 'https://meetrix.test';
 const insforgeUrl = 'https://auth.meetrix.test';
 const makeVerifier = () => randomBytes(32).toString('base64url');
 const digest = value => createHash('sha256').update(value).digest('base64url');
-const user = { id: 'ba012345-8b22-45c1-a642-4edf2abcc820', profile: { name: 'InsForge QA' } };
+const user = { id: 'ba012345-8b22-45c1-a642-4edf2abcc820', email: 'test@example.test', emailVerified: true,
+  profile: { name: 'InsForge QA' } };
 const expectedId = authenticationScope(insforgeUrl) + user.id;
 const fakeJwt = ['eyJhbGciOiJIUzI1NiJ9', Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString('base64url'), 'test'].join('.');
 
@@ -116,6 +117,10 @@ test('only the requesting desktop claims an approved InsForge browser session on
   assert.deepEqual(results.map(result => result.status).sort(), [200, 410]);
   const signedIn = results.find(result => result.status === 200);
   assert.deepEqual(signedIn.body, { user: { id: expectedId, fullName: 'InsForge QA' } });
+  const matchedKeys = db.prepare('SELECT breakout_email_key AS key FROM desktop_sessions WHERE identity = ? ORDER BY kind').all(expectedId);
+  assert.equal(matchedKeys.length, 2);
+  assert.match(matchedKeys[0].key, /^[a-f0-9]{64}$/);
+  assert.equal(matchedKeys[0].key, matchedKeys[1].key);
   assert.match(signedIn.cookies[0], /^__Host-meetrix-auth=/);
   for (const attribute of ['Secure', 'HttpOnly', 'SameSite=Strict', 'Path=/']) assert.ok(signedIn.cookies[0].includes(attribute));
 
@@ -135,7 +140,7 @@ test('only the requesting desktop claims an approved InsForge browser session on
   assert.equal((await call('/meetings', { cookie })).status, 401);
 
   const legacyToken = makeVerifier();
-  db.prepare("INSERT INTO desktop_sessions VALUES (?, 'user_ClerkLegacy', 'Old user', ?, 'desktop')")
+  db.prepare("INSERT INTO desktop_sessions(credential, identity, name, expires_at, kind) VALUES (?, 'user_ClerkLegacy', 'Old user', ?, 'desktop')")
     .run(digest(legacyToken), Date.now() + 60000);
   assert.equal((await call('/meetings', { cookie: '__Host-meetrix-auth=' + legacyToken })).status, 401);
 });

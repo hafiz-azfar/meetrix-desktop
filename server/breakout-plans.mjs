@@ -1,11 +1,16 @@
 import { z } from 'zod';
+import { breakoutEmail } from './breakout-identity.mjs';
 
 const plan = z.object({
   names: z.array(z.string().trim().min(1).max(40)).min(1).max(8),
   selfSelect: z.boolean(),
   durationMinutes: z.number().int().min(1).max(120).nullable(),
+  assignments: z.array(z.object({ email: breakoutEmail, room: z.number().int().min(0).max(7) }).strict()).max(99).optional(),
 }).strict().refine(value => new Set(value.names.map(name => name.toLowerCase())).size === value.names.length,
-  { message: 'Breakout room names must be distinct.' });
+  { message: 'Breakout room names must be distinct.' })
+  .refine(value => !value.assignments || (value.assignments.every(entry => entry.room < value.names.length) &&
+    new Set(value.assignments.map(entry => entry.email)).size === value.assignments.length),
+  { message: 'Assign each email address to one of the planned rooms.' });
 
 export function registerBreakoutPlans(api, { db, byIdentity, meetingFor, serial, error }) {
   const route = '/meetings/:id/breakout-plan';

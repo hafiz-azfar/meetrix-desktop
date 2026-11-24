@@ -311,6 +311,11 @@ try {
   assert.equal(await guest.getByRole('button', { name: 'Annotate', exact: true }).count(), 0);
   await drawOnShare(host, 0.43);
   await waitForInk(guest, 30);
+  assert.equal(await guest.getByRole('button', { name: 'Undo annotation', exact: true }).count(), 0);
+  await host.getByRole('button', { name: 'Undo annotation', exact: true }).click();
+  await waitForInk(guest, 0);
+  await host.getByRole('button', { name: 'Redo annotation', exact: true }).click();
+  await waitForInk(guest, 30);
   const annotationTool = host.getByLabel('Annotation tool');
   const annotationFrame = await host.getByLabel('Presentation annotation canvas').boundingBox();
   assert.ok(annotationFrame);

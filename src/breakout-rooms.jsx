@@ -32,6 +32,7 @@ export function BreakoutRooms({ api, meetingId, participants, moveToWaitingRoom,
   const [notice, setNotice] = useState('');
   const [retry, setRetry] = useState(0);
   const [plan, setPlan] = useState(null);
+  const [preassignedCount, setPreassignedCount] = useState(0);
   const path = '/meetings/' + meetingId + '/breakouts';
   const attendees = participants.filter(participant => !participant.isLocal && participant.identity);
 
@@ -47,6 +48,7 @@ export function BreakoutRooms({ api, meetingId, participants, moveToWaitingRoom,
         setClosesAt(result.closesAt);
         setOpenSelection(result.selfSelect === true);
         setPlan(result.plan ?? null);
+        setPreassignedCount(result.preassignedCount ?? 0);
       } catch (failure) {
         if (!controller.signal.aborted) setError(failure.message);
       } finally {
@@ -186,6 +188,11 @@ export function BreakoutRooms({ api, meetingId, participants, moveToWaitingRoom,
         </select>
       </label>)}
       <button className="button primary" disabled={pending || (!hasAssignments && !selfSelect)}>{pending ? 'Opening…' : 'Open breakout rooms'}</button>
+      {preassignedCount > 0 && <div>
+        <p className="muted">{preassignedCount} {preassignedCount === 1 ? 'participant has' : 'participants have'} scheduled assignments. Matching sign-ins move after admission.</p>
+        <button className="button primary" type="button" disabled={pending}
+          onClick={() => submit({ action: 'open-plan' })}>Open with scheduled assignments</button>
+      </div>}
     </form>}
   </section>;
 }
