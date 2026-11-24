@@ -196,10 +196,14 @@ try {
   await owner.getByRole('heading', { name: 'Meeting recap', level: 1 }).waitFor();
   const recap = owner.getByLabel('Recap draft');
   await recap.waitFor({ timeout: 95_000 });
-  assert.match(await recap.inputValue(), /launch|release/i);
+  assert.match(await recap.inputValue(), /Maya/i);
+  assert.match(await recap.inputValue(), /Friday/i);
   const recapDownload = owner.waitForEvent('download');
   await owner.getByRole('button', { name: 'Download recap' }).click();
-  assert.match(await readFile(await (await recapDownload).path(), 'utf8'), /launch|release/i);
+  assert.match(await readFile(await (await recapDownload).path(), 'utf8'), /Maya/i);
+  const sourceDownload = owner.waitForEvent('download');
+  await owner.getByRole('button', { name: 'Download source captions' }).click();
+  assert.match(await readFile(await (await sourceDownload).path(), 'utf8'), /software launch is approved for Friday/);
   await owner.getByRole('button', { name: 'Return to workspace' }).click();
   await owner.getByRole('button', { name: 'Bookings', exact: true }).waitFor();
   assert.deepEqual(networks, []);

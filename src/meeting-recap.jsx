@@ -30,6 +30,8 @@ export function MeetingRecap({ recap, online = false, review = false }) {
       <div className="meeting-tool-actions">
         <button className="button primary small" disabled={!draft.trim()}
           onClick={() => download('meetrix-meeting-recap.txt', draft + '\n', 'text/plain;charset=utf-8')}>Download recap</button>
+        <button className="button small" disabled={!count}
+          onClick={() => download('meetrix-recap-captions.txt', recap.sourceText() + '\n', 'text/plain;charset=utf-8')}>Download source captions</button>
         {!review && <button className="button small" onClick={() => {
           if (window.confirm('Discard this recap draft?')) recap.discard();
         }}>Discard draft</button>}

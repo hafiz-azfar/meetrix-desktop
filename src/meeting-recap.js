@@ -128,5 +128,10 @@ export function useMeetingRecap() {
     return true;
   }
 
-  return { status, count, limited, progress, draft, setDraft, append, start, finish, discard };
+  function sourceText() {
+    return capture.current.entries.map(({ at, speaker, line }) =>
+      time.format(at) + '  ' + (speaker ? speaker + ': ' : '') + line).join('\n');
+  }
+
+  return { status, count, limited, progress, draft, setDraft, append, start, finish, discard, sourceText };
 }
