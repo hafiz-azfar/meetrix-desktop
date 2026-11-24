@@ -19,7 +19,7 @@ npm ci
 npm run dist
 ```
 
-The installer is written to `release/Meetrix-InsForge-Setup-0.1.17-x64.exe`. To preconfigure the installer with a project, copy `.env.example` to `.env`, fill the InsForge settings, and run `npm run dist:local`. If your project requires an anon key, use its public anon key. Installer and executable signing are left to the distributor. Builds fetch the pinned caption models once and cache them in `vendor/caption-models`.
+The installer is written to `release/Meetrix-InsForge-Setup-0.1.18-x64.exe`. To preconfigure the installer with a project, copy `.env.example` to `.env`, fill the InsForge settings, and run `npm run dist:local`. If your project requires an anon key, use its public anon key. Installer and executable signing are left to the distributor. Builds fetch the pinned caption models once and cache them in `vendor/caption-models`.
 
 ## Host a workspace
 
@@ -53,14 +53,14 @@ Connect **Mail** separately to read recent Inbox and Sent messages and compose p
 
 ## Meeting features
 
-- Schedule one-time, daily, weekday, weekly, or monthly meetings. Daily, weekly, and monthly schedules support custom repeat intervals. A series can contain up to 52 occurrences within the next year. Preview the dates before saving, then download a single occurrence or the whole new series as an iCalendar file for Google Calendar, Outlook, or Apple Calendar.
+- Schedule one-time, daily, weekday, weekly, or monthly meetings. Choose specific weekdays for weekly schedules and a fixed date, ordinal weekday, or last matching weekday for monthly schedules. End a series after a count or on a date. A series can contain up to 52 occurrences within the next year. Preview the dates before saving, then download a single occurrence or the whole new series as an iCalendar file for Google Calendar, Outlook, or Apple Calendar.
 - Audio, video, gallery and speaker views, screen sharing, chat, and reactions.
 - Microphone, camera, and speaker selection before joining or from **Devices** during a call. Browser support determines speaker availability.
 - **Settings** includes a live microphone meter, a speaker test tone, noise reduction, camera preview and mirroring, and saved defaults for joining a call. Preview and diagnostic media stays on your device.
 - Use **Camera background** in Video settings, the pre-join setup, or a meeting’s **Devices** dialog. Choose blur or a JPEG, PNG, or WebP image from your device. The app saves your selection on this device. The bundled model applies the effect locally before Meetrix publishes your camera.
 - Use **Push-to-talk key** under **Keyboard shortcuts** to temporarily open a muted microphone with Space, Backtick, or F8 while the meeting window is focused.
 - On Windows, use the notification-area and reminder options in **Settings → Appearance**. While Meetrix is running, reminders appear within five minutes of a scheduled start and omit meeting details. Double-click the Meetrix icon in the notification area to restore the window.
-- Appearance, in-app shortcut assignments, chat accessibility, caption size and contrast, and presentation preferences are saved on your device. From a call, **View preferences** can pause incoming cameras while preserving audio and presentations. **Call statistics** displays sampled WebRTC media measurements and exports a local JSON snapshot of the displayed metrics.
+- In **Settings → Appearance**, choose Violet, Teal, Blue, or Berry with the light, dark, or system theme. Meetrix saves the selection on your device, along with in-app shortcuts, chat accessibility, caption appearance, and presentation preferences. From a call, **View preferences** can pause incoming cameras while preserving audio and presentations. **Call statistics** displays sampled WebRTC media measurements and exports a local JSON snapshot of the displayed metrics.
 - Host moderation, passcodes, room locks, waiting rooms, and participant removal.
 - In standard meetings, hosts and co-hosts can move an attendee back to the waiting room from **People** or **Breakouts**. Readmitted attendees return to the main room with their camera and microphone off.
 - In standard meetings, open **People** and select **Transfer host** on a connected, signed-in attendee. The meeting continues under the new host, and the original organizer can stay or leave.
@@ -80,7 +80,7 @@ Connect **Mail** separately to read recent Inbox and Sent messages and compose p
 
 ## Workspace features
 
-- **Team chat** stores each channel’s recent conversation. A channel owner can create a time-limited invite code and remove members. Only signed-in members can read or send messages.
+- **Team chat** supports threaded replies and private downloads for channel members. Attach a PDF, PNG, JPEG, or UTF-8 TXT, MD, or CSV file up to 1 MiB to a message or reply. The sender or channel owner can remove the file while keeping the conversation. A channel owner can also create a time-limited invite and revoke a member’s access.
 - **Tasks** stores private to-dos with due dates and completion status. **Canvas** stores private documents with a Markdown preview and export.
 - **Clips** records a selected screen or window, with optional microphone audio. A clip lasts up to two minutes and can be played or downloaded as WebM from the local device library.
 - **Bookings** publishes available meeting slots. An invitee claims a slot and receives a meeting link and calendar invitation. The host admits them from the waiting room. Public links require a reachable hosted workspace.

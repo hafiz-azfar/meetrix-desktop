@@ -55,8 +55,9 @@ function App() {
   const [prefs, updatePrefs] = useDevicePreferences();
   useEffect(() => {
     document.documentElement.dataset.theme = prefs.theme;
+    document.documentElement.dataset.accent = prefs.accent;
     document.documentElement.dataset.reducedMotion = String(prefs.reducedMotion);
-  }, [prefs.theme, prefs.reducedMotion]);
+  }, [prefs.theme, prefs.accent, prefs.reducedMotion]);
   useEffect(() => {
     const control = new AbortController();
     Promise.all([

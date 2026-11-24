@@ -281,5 +281,20 @@ export function openDatabase(filename) {
   const attendanceColumns = new Set(db.prepare('PRAGMA table_info(attendance)').all().map(column => column.name));
   if (!attendanceColumns.has('placement_epoch')) db.exec('ALTER TABLE attendance ADD COLUMN placement_epoch INTEGER NOT NULL DEFAULT 0');
   if (!attendanceColumns.has('waiting_evicting')) db.exec('ALTER TABLE attendance ADD COLUMN waiting_evicting INTEGER NOT NULL DEFAULT 0');
+  if (!db.prepare('PRAGMA table_info(team_messages)').all().some(column => column.name === 'reply_to')) {
+    db.exec('ALTER TABLE team_messages ADD COLUMN reply_to INTEGER REFERENCES team_messages(id) ON DELETE CASCADE');
+  }
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS team_message_threads ON team_messages(channel, reply_to, id DESC);
+    CREATE INDEX IF NOT EXISTS team_message_replies ON team_messages(reply_to) WHERE reply_to IS NOT NULL;
+    CREATE TABLE IF NOT EXISTS team_attachments (
+      message INTEGER PRIMARY KEY REFERENCES team_messages(id) ON DELETE CASCADE,
+      channel TEXT NOT NULL REFERENCES team_channels(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      size INTEGER NOT NULL CHECK(size BETWEEN 1 AND 1048576),
+      contents BLOB NOT NULL CHECK(length(contents) = size)
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS team_attachments_channel ON team_attachments(channel);
+  `);
   return db;
 }

@@ -45,15 +45,19 @@ async function fixture(t) {
     close();
   });
   const root = 'http://127.0.0.1:' + server.address().port + '/api';
-  async function api(path, { token = 'owner', method = 'GET', body, userOrigin = origin } = {}) {
-    const response = await fetch(root + path, {
+  function request(path, { token = 'owner', method = 'GET', body, userOrigin = origin, contentType = 'application/json' } = {}) {
+    return fetch(root + path, {
       method,
       headers: { Origin: userOrigin, ...(token ? { Authorization: 'Bearer ' + token } : {}),
-        ...(body ? { 'Content-Type': 'application/json' } : {}) },
+        ...(body ? { 'Content-Type': contentType } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
+  }
+  async function api(path, options) {
+    const response = await request(path, options);
     return { status: response.status, json: await response.json() };
   }
+  api.request = request;
   api.text = async path => {
     const response = await fetch(root + path);
     return { status: response.status, type: response.headers.get('content-type'), body: await response.text() };
@@ -241,6 +245,61 @@ test('team channel content is membership-scoped and removing a member rotates ac
   assert.equal((await join('stranger')).status, 404);
   assert.equal((await api(path, { method: 'DELETE', body: {} })).status, 200);
   assert.deepEqual((await api(base)).json, []);
+});
+
+test('team attachments and replies stay within their channel and current membership', async t => {
+  const { api } = await fixture(t);
+  const base = '/workspace/channels';
+  const create = (title, token = 'owner') => api(base, { method: 'POST', token, body: { title, name: token } });
+  const channel = base + '/' + (await create('Team files')).json.id;
+  const other = base + '/' + (await create('Other files')).json.id;
+  const parent = (await api(channel + '/messages', { method: 'POST', body: { text: 'Review the report' } })).json.id;
+  const reply = (route, replyTo, token = 'owner') => api(route + '/messages', {
+    method: 'POST', token, body: { text: 'Reviewed', replyTo },
+  });
+  const upload = (body, token = 'owner', userOrigin = origin) => api(channel + '/attachments', {
+    method: 'POST', token, userOrigin, body, contentType: 'application/vnd.meetrix.attachment+json',
+  });
+  const file = 'Launch notes\nReady for review.\n';
+  const attachment = { text: 'Draft for discussion', name: 'Launch notes.txt', data: Buffer.from(file).toString('base64'), replyTo: parent };
+  assert.equal((await upload(attachment, 'guest')).status, 404);
+  assert.equal((await upload(attachment, 'owner', 'https://other.test')).status, 403);
+  assert.equal((await upload({ ...attachment, name: 'notes.exe' })).status, 400);
+  assert.equal((await upload({ ...attachment, name: 'notes.pdf' })).status, 400);
+  assert.equal((await upload({ ...attachment, name: '../notes.txt' })).status, 400);
+  assert.equal((await upload({ ...attachment, data: Buffer.alloc(1024 * 1024 + 40000, 'a').toString('base64') })).status, 413);
+  assert.equal((await reply(other, parent)).status, 404);
+  const key = (await api(channel + '/invite', { method: 'POST', body: {} })).json.code;
+  assert.equal((await api(base + '/join', { method: 'POST', token: 'guest', body: { name: 'Guest', code: key } })).status, 200);
+  const sent = await upload(attachment, 'guest');
+  assert.equal(sent.status, 201);
+  const filePath = channel + '/attachments/' + sent.json.id;
+  const threadPath = channel + '/messages/' + parent + '/replies';
+  assert.equal((await reply(channel, sent.json.id)).status, 404);
+  const { messages, members } = (await api(channel + '/messages')).json;
+  assert.deepEqual(messages.map(message => [message.id, message.replyCount]), [[parent, 1]]);
+  const thread = (await api(threadPath, { token: 'guest' })).json;
+  assert.equal(thread.replies[0].attachmentName, attachment.name);
+  assert.equal(thread.replies[0].data, undefined);
+  const fetched = await api.request(filePath, { token: 'guest' });
+  assert.equal(await fetched.text(), file);
+  assert.match(fetched.headers.get('content-disposition'), /^attachment;/);
+  assert.equal(fetched.headers.get('content-type'), 'application/octet-stream');
+  assert.equal(fetched.headers.get('cache-control'), 'no-store');
+  assert.equal(fetched.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal((await api(other + '/attachments/' + sent.json.id)).status, 404);
+  assert.equal((await api(filePath, { token: 'stranger' })).status, 404);
+  const ownerFile = await upload({ ...attachment, replyTo: undefined, text: '' });
+  const ownerFilePath = channel + '/attachments/' + ownerFile.json.id;
+  const remove = (path, token) => api(path, { method: 'DELETE', body: {}, token });
+  assert.equal((await remove(ownerFilePath, 'guest')).status, 404);
+  assert.equal((await remove(ownerFilePath, 'owner')).status, 200);
+  assert.equal((await api(ownerFilePath)).status, 404);
+  assert.equal((await api(channel + '/members/' + members[0].id, { method: 'DELETE', body: {} })).status, 200);
+  assert.equal((await api(threadPath, { token: 'guest' })).status, 404);
+  assert.equal((await api(filePath, { token: 'guest' })).status, 404);
+  assert.equal((await api(channel, { method: 'DELETE', body: {} })).status, 200);
+  assert.equal((await api(filePath)).status, 404);
 });
 
 test('accountless guests need host opt-in, the passcode, and admission for each meeting', async t => {

@@ -39,6 +39,12 @@ function AppearanceSettings({ prefs, updatePrefs }) {
           <option value="light">Light</option><option value="dark">Dark</option><option value="system">System</option>
         </select>
       </label>
+      <label className="default-view">Accent color
+        <select value={prefs.accent} onChange={event => updatePrefs({ accent: event.target.value })}>
+          <option value="violet">Violet</option><option value="teal">Teal</option>
+          <option value="blue">Blue</option><option value="berry">Berry</option>
+        </select>
+      </label>
       {!!window.meetrixDesktop?.setDesktopPreferences && <>
         <label className="check"><input type="checkbox" checked={prefs.minimizeToTray}
           onChange={event => updatePrefs({ minimizeToTray: event.target.checked })} /> Minimize Meetrix to the notification area</label>

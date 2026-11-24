@@ -64,3 +64,25 @@ test('calendar files include distinct event IDs and fold escaped Unicode text co
   assert.ok(unfolded.includes('DESCRIPTION:Join in Meetrix: https://workspace.meetrix.test/join?m=abcdefghijklmnop'));
   assert.ok(unfolded.includes('URL:https://workspace.meetrix.test/join?m=qrstuvwxyzabcdef'));
 });
+
+test('weekly selections repeat in their chosen weeks and stop on the end date', () => {
+  const now = Date.parse('2026-03-01T00:00:00Z');
+  const weeklyDays = [1, 5];
+  assert.deepEqual(iso(meetingOccurrences('2026-03-04T11:00', 'weekly', 1, now, 2, { weeklyDays, until: '2026-03-20' })), [
+    '2026-03-04T16:00:00.000Z', '2026-03-06T16:00:00.000Z', '2026-03-16T15:00:00.000Z',
+    '2026-03-18T15:00:00.000Z', '2026-03-20T15:00:00.000Z',
+  ]);
+  assert.throws(() => meetingOccurrences('2026-03-04T11:00', 'weekly', 1, now, 1, { until: '2026-03-04' }), /at least two/);
+  assert.throws(() => meetingOccurrences('2026-03-04T11:00', 'daily', 1, now, 1, { until: '2026-08-01' }), /no more than 52/);
+});
+
+test('monthly ordinal and last-weekday patterns handle short months and DST', () => {
+  const now = Date.parse('2026-01-01T00:00:00Z');
+  assert.deepEqual(iso(meetingOccurrences('2026-01-30T09:15', 'monthly', 3, now, 1, { monthlyPattern: 'last' })), [
+    '2026-01-30T14:15:00.000Z', '2026-02-27T14:15:00.000Z', '2026-03-27T13:15:00.000Z',
+  ]);
+  assert.deepEqual(iso(meetingOccurrences('2026-01-30T09:15', 'monthly', 3, now, 1, { monthlyPattern: 'ordinal' })), [
+    '2026-01-30T14:15:00.000Z', '2026-05-29T13:15:00.000Z', '2026-07-31T13:15:00.000Z',
+  ]);
+  assert.throws(() => meetingOccurrences('2026-01-23T09:15', 'monthly', 3, now, 1, { monthlyPattern: 'last' }), /starting month/);
+});

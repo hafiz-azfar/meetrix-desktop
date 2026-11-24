@@ -9,7 +9,7 @@ export function apiFor() {
       cache: 'no-store',
       credentials: 'same-origin',
       signal: options.signal,
-      headers: options.body ? { 'Content-Type': 'application/json' } : {},
+      headers: options.body ? { 'Content-Type': options.contentType || 'application/json' } : {},
       ...(options.body ? { body: JSON.stringify(options.body) } : {}),
     });
     const payload = await response.json();

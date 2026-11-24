@@ -37,3 +37,30 @@
 
 :root[data-theme="dark"] { color-scheme: dark; }
 :root[data-theme="system"] { color-scheme: light dark; }
+
+:root[data-accent="teal"] {
+  --accent: light-dark(#005d65, #84e1d5);
+  --accent-hover: light-dark(#004951, #a4f5e7);
+  --accent-ink: light-dark(#ffffff, #122928);
+  --accent-soft: light-dark(#dff4f0, #253f43);
+  --accent-border: light-dark(#a3d4cf, #457175);
+  --stage-accent: #9af0e1;
+}
+
+:root[data-accent="blue"] {
+  --accent: light-dark(#2055a0, #aacdff);
+  --accent-hover: light-dark(#194584, #cbdeff);
+  --accent-ink: light-dark(#ffffff, #132746);
+  --accent-soft: light-dark(#e8f1ff, #283a59);
+  --accent-border: light-dark(#b9d1fa, #546b93);
+  --stage-accent: #c0d9ff;
+}
+
+:root[data-accent="berry"] {
+  --accent: light-dark(#8b2a58, #ffb4d2);
+  --accent-hover: light-dark(#722148, #ffd2e5);
+  --accent-ink: light-dark(#ffffff, #3b1729);
+  --accent-soft: light-dark(#fbe9f0, #473147);
+  --accent-border: light-dark(#edbbce, #79546f);
+  --stage-accent: #ffc7df;
+}

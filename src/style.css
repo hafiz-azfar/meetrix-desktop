@@ -123,9 +123,15 @@
   .team-channel .section-header { padding: 0; }
   .team-channel > label { display: grid; gap: .25rem; }
   .team-messages { max-height: min(48vh, 28rem); overflow: auto; display: grid; gap: .5rem; padding: .5rem; }
-  .team-messages article { padding: .5rem .75rem; border-radius: var(--radius); background: var(--panel-raised); }
-  .team-messages article p { margin: .2rem 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-  .team-messages time { color: var(--muted); font-size: .75rem; }
+  .team-message { padding: .5rem .75rem; border-radius: var(--radius); background: var(--panel-raised); }
+  .team-message p { margin: .2rem 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .team-message time { color: var(--muted); font-size: .75rem; }
+  .chat-file { color: var(--accent); }
+  .chat-file + button { margin-inline-start: .5rem; }
+  .dialog form:has(input[type="file"]) { margin-top: .75rem; }
+  .form input[type="file"] { max-width: 100%; }
+  .schedule-days { display: flex; flex-wrap: wrap; gap: .45rem .8rem; min-width: 0; border: 1px solid var(--line); border-radius: var(--radius); }
+  .schedule-days legend { padding-inline: .25rem; }
   .clip-player { width: 100%; max-height: 48vh; background: var(--stage); border-radius: var(--radius); }
   .clip-capture { margin-bottom: 1rem; }
   .clip-capture .meeting-tool-actions { margin-top: .75rem; }

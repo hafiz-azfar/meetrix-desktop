@@ -8,7 +8,7 @@ const defaults = {
   camera: false, microphone: false, cameraId: '', microphoneId: '', speakerId: '',
   mirrorCamera: true, reduceNoise: true, speakerVolume: 1, layout: 'grid',
   background: 'off', backgroundImage: '',
-  theme: 'light', meetingTimer: false, hideSelf: false, cameraOnly: false, showNames: true,
+  theme: 'light', accent: 'violet', meetingTimer: false, hideSelf: false, cameraOnly: false, showNames: true,
   confirmLeave: false, pauseIncomingCameras: false, shareFps: 0, shareHint: '', shareLayout: 'stacked',
   chatSize: 'standard', announceMessages: true, reducedMotion: false,
   captionSize: 'standard', captionContrast: 'standard',
@@ -27,7 +27,8 @@ export function useDevicePreferences() {
       const saved = JSON.parse(localStorage.getItem(storageKey) || '{}') ?? {};
       const backgroundImage = validBackgroundImage(saved.backgroundImage) ? saved.backgroundImage : '';
       const background = saved.background === 'blur' || (saved.background === 'image' && backgroundImage) ? saved.background : 'off';
-      return { ...defaults, ...saved, background, backgroundImage, shortcuts: { ...defaultShortcuts, ...saved.shortcuts } };
+      const accent = ['violet', 'teal', 'blue', 'berry'].includes(saved.accent) ? saved.accent : defaults.accent;
+      return { ...defaults, ...saved, accent, background, backgroundImage, shortcuts: { ...defaultShortcuts, ...saved.shortcuts } };
     }
     catch { return defaults; }
   });

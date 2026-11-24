@@ -43,6 +43,7 @@ const timeLabel = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', time
 const occurrenceLabel = new Intl.DateTimeFormat(undefined, {
   weekday: 'short', year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
 });
+const scheduleWeekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const inviteCode = new URLSearchParams(location.search).get('m');
 
 function localDateValue(time) {
@@ -57,9 +58,15 @@ function MeetingForm({ mode, meeting, api, name, close, onCreated }) {
   const [repeat, setRepeat] = useState('once');
   const [count, setCount] = useState('4');
   const [interval, setInterval] = useState('1');
+  const [weeklyDays, setWeeklyDays] = useState([]);
+  const [monthlyPattern, setMonthlyPattern] = useState('date');
+  const [endMode, setEndMode] = useState('count');
+  const [endDate, setEndDate] = useState('');
+  const startingWeekday = when ? new Date(when).getDay() : -1;
   const unit = { daily: 'days', weekly: 'weeks', monthly: 'months' }[repeat];
   function selectedDates() {
-    return meetingOccurrences(when, repeat, Number(count), Date.now(), unit ? Number(interval) : 1);
+    return meetingOccurrences(when, repeat, Number(count), Date.now(), unit ? Number(interval) : 1,
+      { weeklyDays, monthlyPattern, ...(endMode === 'date' ? { until: endDate } : {}) });
   }
   const recurring = mode === 'schedule' && repeat !== 'once';
   let upcoming = [];
@@ -110,12 +117,37 @@ function MeetingForm({ mode, meeting, api, name, close, onCreated }) {
           <input type="number" value={interval} onChange={event => setInterval(event.target.value)}
             min="1" max={maxRepeatInterval} required />
         </label>}
-        <label>Number of occurrences<input type="number" value={count} onChange={event => setCount(event.target.value)}
-          min="2" max={maxOccurrences} required /></label>
+        {repeat === 'weekly' && <fieldset className="schedule-days">
+          <legend>Repeat on</legend>
+          {[1, 2, 3, 4, 5, 6, 0].map(day => <label className="check" key={day}>
+            <input type="checkbox" checked={startingWeekday === day || weeklyDays.includes(day)}
+              disabled={startingWeekday === day} onChange={event => {
+                const checked = event.target.checked;
+                setWeeklyDays(previous => checked ? [...previous, day] : previous.filter(value => value !== day));
+              }} />{scheduleWeekdays[day]}
+          </label>)}
+        </fieldset>}
+        {repeat === 'monthly' && <label>Monthly pattern<select value={monthlyPattern} onChange={event => setMonthlyPattern(event.target.value)}>
+          <option value="date">Same day of the month</option>
+          <option value="ordinal">Same weekday and week of the month</option>
+          <option value="last">Last matching weekday of the month</option>
+        </select></label>}
+        <label>End series<select value={endMode} onChange={event => setEndMode(event.target.value)}>
+          <option value="count">After a number of meetings</option>
+          <option value="date">On a date</option>
+        </select></label>
+        {endMode === 'date'
+          ? <label>End date<input type="date" value={endDate} min={when.slice(0, 10)}
+            onChange={event => setEndDate(event.target.value)} required /></label>
+          : <label>Number of occurrences<input type="number" value={count} onChange={event => setCount(event.target.value)}
+            min="2" max={maxOccurrences} required /></label>}
         {!!upcoming.length && <details><summary>Preview {upcoming.length} meeting times</summary>
           <ol>{upcoming.map(time => <li key={time.toISOString()}>{occurrenceLabel.format(time)}</li>)}</ol>
         </details>}
-        {repeat === 'monthly' && Number(when.slice(8, 10)) > 28 && <p className="muted">Shorter months use their last day.</p>}
+        {repeat === 'monthly' && monthlyPattern === 'date' && Number(when.slice(8, 10)) > 28 &&
+          <p className="muted">Shorter months use their last day.</p>}
+        {repeat === 'monthly' && monthlyPattern === 'ordinal' && Number(when.slice(8, 10)) > 28 &&
+          <p className="muted">Months without a fifth matching weekday are skipped.</p>}
         {clockAdjusted && <p className="muted">A clock change moves one or more start times. Check the preview.</p>}
       </>}
       {mode !== 'edit' && <><label><span>Passcode <span className="muted">(optional)</span></span><input name="passcode" type="password" autoComplete="new-password" minLength={8} maxLength={128} placeholder="At least 8 characters" /></label>

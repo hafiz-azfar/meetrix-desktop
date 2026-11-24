@@ -68,6 +68,9 @@
 | F16-H3 | Organizer opts in to background synchronization. Only one-sided changes are applied and conflicts pause sync | Google and Outlook API fixtures and Outlook browser smoke test |
 | F19-H2 | Outlook Mail consent is separate from Calendar. Inbox and Sent show plain text. Compose requires confirmation | Outlook API fixtures and browser smoke test |
 | F34-H1 | Enabling the Windows tray hides the minimized app and reminders omit meeting details | Unpacked Windows smoke test |
+| F19-H3 | Channel members post a threaded attachment and download it. Outsiders and removed members are denied. Removing the file preserves its message | API and workspace browser smoke tests |
+| F35-H1 | A selected weekday series previews and exports the same meeting times. Ordinal and last-weekday patterns preserve wall time through DST | Schedule unit and workspace browser smoke tests |
+| F36-H1 | A selected desktop accent persists when the app theme changes or the workspace reloads | Workspace browser smoke test |
 | F12-P1 | 100-person load, 30-hour duration, and production availability | Deployment-scale verification |
 
 Run `npm test` for the API suite. The RTC tests use two isolated browser pages and a real loopback LiveKit server. The desktop test is aimed at the Windows development build.

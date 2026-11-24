@@ -17,7 +17,7 @@ F15,Pro,AI note-taking and summaries,should,yes,partial,On-device excerpt summar
 F16,Pro,Recurring scheduling and calendar sync,should,yes,partial,Up to 52 dates with preview plus ICS downloads and an owner calendar feed plus manual and automatic Google or Outlook synchronization with conflict detection
 F17,Pro,Whiteboard and breakout rooms,should,yes,partial,Whiteboard and manually assigned or self-selected rooms with text announcements and timed returns
 F18,Pro,Live captions and translation,should,yes,partial,Manual and automatic English captions with per-viewer size and contrast and on-device Hindi and Spanish translation and export
-F19,Workplace,Team chat mail and phone,could,yes,partial,Member-scoped text channels with expiring invite codes and Outlook plain-text mail; broader mail tools and phone pending
+F19,Workplace,Team chat mail and phone,could,yes,partial,Member-scoped channels with threaded replies and 1 MiB file attachments plus Outlook plain-text mail; broader mail tools and phone pending
 F20,Workplace,Canvas clips tasks and booking pages,could,yes,partial,Personal Canvas and Tasks local WebM Clips and link-based bookings; hosted sharing and collaboration pending
 F21,Workplace,Admin console large scale support,could,yes,no,
 F22,Collaboration,In-room polls,should,yes,yes,One vote per account and host-controlled closing
@@ -33,3 +33,5 @@ F31,Meetings,Move an attendee back to the waiting room,should,yes,yes,Host and c
 F32,Collaboration,Presentation annotations,should,yes,partial,Freehand shapes and text with gated attendee contributions and presenter clearing and PNG export
 F33,Meetings,Connection statistics and diagnostics,should,yes,yes,Local WebRTC metrics without participant names or network addresses
 F34,Desktop,Tray and scheduled reminders,should,yes,partial,Optional minimize to notification area with generic reminders while the app is running
+F35,Meetings,Custom recurring meeting patterns,should,yes,partial,Selected weekdays and monthly weekday patterns plus an end date within one year and up to 52 occurrences
+F36,Desktop,Accent themes,should,yes,yes,Four accessible color accents in light dark and system modes

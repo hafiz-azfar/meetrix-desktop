@@ -10,7 +10,7 @@ import { z } from 'zod';
 import { authenticationScope, createInsforgeAuth, insforgeSettings } from './auth.mjs';
 import { openDatabase } from './db.mjs';
 import { createDesktopAuth } from './desktop-auth.mjs';
-import { registerTeamChat } from './team-chat.mjs';
+import { isTeamUpload, registerTeamChat } from './team-chat.mjs';
 import { googleCalendarRoutes } from './google-calendar.mjs';
 import { outlookRoutes } from './outlook.mjs';
 import { calendarFeedRoutes } from './calendar-feed.mjs';
@@ -210,7 +210,9 @@ export function createApp(options, dependencies = {}) {
   api.use((req, _res, next) => {
     const requestOrigin = req.get('origin');
     if (requestOrigin && requestOrigin !== origin) throw new RequestError(403, 'This origin is not allowed.');
-    if (!['GET', 'HEAD'].includes(req.method) && !req.is('application/json')) throw new RequestError(415, 'Send a JSON request.');
+    if (!['GET', 'HEAD'].includes(req.method) && !req.is('application/json') && !isTeamUpload(req)) {
+      throw new RequestError(415, 'Send a JSON request.');
+    }
     next();
   });
   api.use(express.json({ limit: '56kb' }));
@@ -953,7 +955,7 @@ export function createApp(options, dependencies = {}) {
   app.use((error, _req, res, _next) => {
     if (error instanceof z.ZodError) return res.status(400).json({ error: 'Check the submitted values and try again.' });
     if (error instanceof RequestError) return res.status(error.status).json({ error: error.message });
-    if (error.status === 413 || error.status === 400) return res.status(error.status).json({ error: 'Invalid request body.' });
+    if ([400, 413, 415].includes(error.status)) return res.status(error.status).json({ error: 'Invalid request body.' });
     console.error('Unhandled request error:', error.name);
     return res.status(500).json({ error: 'The server could not complete the request.' });
   });
