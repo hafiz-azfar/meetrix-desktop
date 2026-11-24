@@ -19,7 +19,7 @@ import { registerPersonalWorkspace } from './personal-workspace.mjs';
 import { breakoutStore } from './breakouts.mjs';
 import { registerBreakoutVoice } from './breakout-voice.mjs';
 import { breakoutHelpTopic } from './breakout-voice-format.mjs';
-import { breakoutEmailKey } from './breakout-identity.mjs';
+import { breakoutEmail, breakoutEmailKey } from './breakout-identity.mjs';
 import { registerBreakoutPlans } from './breakout-plans.mjs';
 import { registerMeetingSeries } from './meeting-series.mjs';
 import { cloudCommand, cloudRecordingId, createCloudRecording } from './cloud-recording.mjs';
@@ -34,6 +34,8 @@ const person = z.string().trim().min(1).max(60);
 const participantIdentity = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
 const meetingTitle = z.string().trim().min(1).max(100);
 const duration = z.number().int().min(15).max(1800);
+const alternativeHostList = z.array(breakoutEmail).max(5)
+  .refine(emails => new Set(emails).size === emails.length, 'Use distinct alternative host addresses.');
 const schedule = z.object({
   title: meetingTitle,
   name: person,
@@ -43,9 +45,10 @@ const schedule = z.object({
   lobby: z.boolean().default(true),
   allowGuests: z.boolean().default(false),
   encrypted: z.boolean().default(false),
+  alternativeHosts: alternativeHostList.default([]),
   passcode: optionalPasscode,
 }).strict();
-const reschedule = z.object({ title: meetingTitle, startAt: z.iso.datetime(), duration }).strict();
+const reschedule = z.object({ title: meetingTitle, startAt: z.iso.datetime(), duration, alternativeHosts: alternativeHostList.optional() }).strict();
 const join = z.object({ name: person, passcode: optionalPasscode, keyReady: z.boolean().optional() }).strict();
 const guestJoin = join.extend({ proof: z.string().regex(/^[a-f0-9]{32}$/) });
 const roomIdSchema = z.string().regex(/^(?:breakout_)?[A-Za-z0-9_-]{16}$/);
@@ -77,6 +80,7 @@ const microphoneRequestTopic = 'meetrix.microphone-request';
 const moderation = z.discriminatedUnion('action', [
   z.object({ action: z.literal('transfer-host'), identity: participantIdentity,
     sid: z.string().regex(/^PA_[A-Za-z0-9]{1,64}$/) }).strict(),
+  z.object({ action: z.literal('reclaim-host') }).strict(),
   z.object({ action: z.literal('co-host'), identity: participantIdentity,
     sid: z.string().regex(/^PA_[A-Za-z0-9]{1,64}$/), enabled: z.boolean() }).strict(),
   z.object({ action: z.literal('decide'), identity: participantIdentity, admit: z.boolean() }).strict(),
@@ -124,6 +128,9 @@ function scheduledTime(input, now) {
 }
 
 const activeHost = meeting => meeting.host_identity ?? meeting.owner;
+const reclaimOrganizer = meeting => !meeting.stopped_at && meeting.alternative_host_started && meeting.host_version === 1 ? meeting.owner : null;
+const reservedMainRoom = (meeting, identity) => identity === activeHost(meeting) || identity === reclaimOrganizer(meeting);
+const alternativeHosts = meeting => meeting.alternative_hosts ? JSON.parse(meeting.alternative_hosts) : [];
 
 function view(meeting, userId) {
   return {
@@ -131,6 +138,9 @@ function view(meeting, userId) {
     openedAt: meeting.opened_at, stoppedAt: meeting.stopped_at, lobby: !!meeting.lobby,
     locked: !!meeting.locked, encrypted: !!meeting.encrypted, hasPasscode: !!meeting.passcode, isHost: activeHost(meeting) === userId,
     sequence: meeting.calendar_revision,
+    ...(meeting.owner === userId && meeting.alternative_hosts && !meeting.opened_at && !meeting.stopped_at
+      ? { alternativeHosts: alternativeHosts(meeting) } : {}),
+    ...(reclaimOrganizer(meeting) ? { reclaimOrganizer: meeting.owner } : {}),
     ...(meeting.owner === userId && meeting.series_id ? { seriesIndex: meeting.series_index } : {}),
   };
 }
@@ -183,6 +193,10 @@ export function createApp(options, dependencies = {}) {
     WHERE attendance.waiting_evicting = 1 AND meetings.stopped_at IS NULL LIMIT 50`);
   const log = db.prepare('INSERT INTO audit(meeting, actor, event, subject, created_at) VALUES(?, ?, ?, ?, ?)');
   const start = db.prepare('UPDATE meetings SET opened_at = ? WHERE id = ? AND opened_at IS NULL');
+  const startAsAlternative = db.prepare(`UPDATE meetings SET opened_at = ?, host_identity = ?, host_version = host_version + 1,
+    alternative_host_started = 1 WHERE id = ? AND opened_at IS NULL AND stopped_at IS NULL`);
+  const admitAlternative = db.prepare(`INSERT INTO attendance(meeting, identity, name, decision, requested_at)
+    VALUES(?, ?, ?, 'admitted', ?) ON CONFLICT(meeting, identity) DO UPDATE SET name = excluded.name, decision = 'admitted'`);
   const markEnded = db.prepare('UPDATE meetings SET stopped_at = COALESCE(stopped_at, ?) WHERE id = ?');
   const markCleaned = db.prepare('UPDATE meetings SET cleaned_at = ? WHERE id = ?');
   const expired = db.prepare('SELECT id FROM meetings WHERE (stopped_at IS NOT NULL AND cleaned_at IS NULL) OR (stopped_at IS NULL AND opened_at <= ?) LIMIT 50');
@@ -550,7 +564,7 @@ export function createApp(options, dependencies = {}) {
   }
   async function availableBreakouts(meeting, identity) {
     const location = currentLocation(meeting.id, identity);
-    if (meeting.encrypted || identity === activeHost(meeting) || location.moderatorVisit) return [];
+    if (meeting.encrypted || reservedMainRoom(meeting, identity) || location.moderatorVisit) return [];
     const choices = breakouts.choices(meeting.id);
     if (choices.length && (moderatorRoomMetadata(meeting.id, identity, location.roomId) ||
         await isActiveCoHost(meeting, identity))) return [];
@@ -608,7 +622,7 @@ export function createApp(options, dependencies = {}) {
     const roomIds = [meeting.id, ...breakouts.list(meeting.id).map(room => room.id)];
     return Promise.allSettled(roomIds.map(id => media(client => client.sendData?.(id, data, DataPacket_Kind.RELIABLE, { topic: hostRolesTopic }))));
   }
-  async function changeHost(meeting, successor, event, verify) {
+  async function changeHost(meeting, successor, event, { verify, actor = activeHost(meeting) } = {}) {
     await cloud?.stopMeeting(meeting, 'Meeting control changed.');
     if (verify && (!(await verify()) || meetingEnded(meeting))) return meeting;
     const previousHost = activeHost(meeting);
@@ -618,7 +632,7 @@ export function createApp(options, dependencies = {}) {
       addPreviousHost.run(meeting.id, previousHost, meeting.owner_name, now);
       revokeCoHost.run(meeting.id, successor);
       assignHost.run(successor, meeting.id);
-      log.run(meeting.id, previousHost, event, successor, now);
+      log.run(meeting.id, actor, event, successor, now);
       db.exec('COMMIT');
     } catch (error) {
       db.exec('ROLLBACK');
@@ -651,12 +665,12 @@ export function createApp(options, dependencies = {}) {
     if (now - absence.since < hostReconnectGrace) return;
     for (const { identity } of delegates) {
       if (identity.startsWith('guest_') || !(await isActiveCoHost(meeting, identity))) continue;
-      await changeHost(meeting, identity, 'host-succession', async () => {
+      await changeHost(meeting, identity, 'host-succession', { verify: async () => {
         if (!(await isActiveCoHost(meeting, identity))) return false;
         if (!(await hostIsPresent(meeting))) return true;
         absentHosts.delete(meetingId);
         return false;
-      });
+      } });
       return;
     }
   }
@@ -719,6 +733,7 @@ export function createApp(options, dependencies = {}) {
 
   api.post('/meetings', byIdentity(20), async (req, res) => {
     const input = schedule.parse(req.body);
+    if (input.alternativeHosts.length && !input.startAt) throw new RequestError(400, 'Schedule the meeting to add alternative hosts.');
     if (input.allowGuests && !input.lobby) {
       throw new RequestError(400, 'Enable the waiting room to allow guests without an account.');
     }
@@ -735,14 +750,15 @@ export function createApp(options, dependencies = {}) {
       }
     }
     const insert = db.prepare(`INSERT INTO meetings(id, owner, owner_name, title, start_at, duration_minutes, created_at,
-      lobby, allow_guests, passcode, encrypted, series_id, series_index) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+      lobby, allow_guests, passcode, encrypted, series_id, series_index, alternative_hosts) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     const ids = times.map(() => randomBytes(12).toString('base64url'));
     const seriesId = ids.length > 1 ? ids[0] : null;
+    const alternateRoster = input.alternativeHosts.length ? JSON.stringify(input.alternativeHosts) : null;
     db.exec('BEGIN IMMEDIATE');
     try {
       ids.forEach((id, index) => {
         insert.run(id, req.identity, input.name, input.title, times[index], input.duration, now, Number(input.lobby), Number(input.allowGuests),
-          passcodes[index], Number(input.encrypted), seriesId, seriesId ? index : null);
+          passcodes[index], Number(input.encrypted), seriesId, seriesId ? index : null, alternateRoster);
         log.run(id, req.identity, 'create', null, now);
       });
       db.exec('COMMIT');
@@ -759,8 +775,11 @@ export function createApp(options, dependencies = {}) {
       const current = findMeeting.get(initial.id);
       if (current.opened_at || current.stopped_at) throw new RequestError(409, 'Only unopened meetings can be rescheduled.');
       const now = Date.now();
-      db.prepare('UPDATE meetings SET title = ?, start_at = ?, duration_minutes = ?, calendar_revision = calendar_revision + 1 WHERE id = ?')
-        .run(input.title, scheduledTime(input.startAt, now), input.duration, current.id);
+      const alternates = input.alternativeHosts === undefined ? current.alternative_hosts :
+        input.alternativeHosts.length ? JSON.stringify(input.alternativeHosts) : null;
+      db.prepare(`UPDATE meetings SET title = ?, start_at = ?, duration_minutes = ?, alternative_hosts = ?,
+        calendar_revision = calendar_revision + 1 WHERE id = ?`)
+        .run(input.title, scheduledTime(input.startAt, now), input.duration, alternates, current.id);
       log.run(current.id, req.identity, 'reschedule', null, now);
       return view(findMeeting.get(current.id), req.identity);
     });
@@ -773,7 +792,7 @@ export function createApp(options, dependencies = {}) {
 
   function assignScheduledBreakout(meeting, guest) {
     if (!meeting.encrypted && guest?.decision === 'admitted' && guest.breakout_email_key &&
-        guest.identity !== activeHost(meeting) && !findCoHost.get(meeting.id, guest.identity) &&
+        !reservedMainRoom(meeting, guest.identity) && !findCoHost.get(meeting.id, guest.identity) &&
         (!breakouts.closesAt(meeting.id) || breakouts.closesAt(meeting.id) > Date.now())) {
       breakouts.assignScheduled(meeting.id, guest.identity, guest.breakout_email_key);
     }
@@ -783,16 +802,22 @@ export function createApp(options, dependencies = {}) {
     const verified = initial.passcode && !findGuest.get(initial.id, identity)
       ? await checkPasscode(input.passcode, initial.passcode) : true;
     return serial(initial.id, async () => {
-      const current = findMeeting.get(initial.id);
-      const isHost = !accountless && activeHost(current) === identity;
+      let current = findMeeting.get(initial.id);
       if (meetingEnded(current)) {
         throw new RequestError(410, 'This meeting has ended.');
+      }
+      const alreadyOpen = Boolean(current.opened_at);
+      const alternative = !accountless && !alreadyOpen && identity !== current.owner && verifiedEmailKey &&
+        alternativeHosts(current).some(email => emailKey(email) === verifiedEmailKey);
+      const isHost = !accountless && (activeHost(current) === identity || alternative);
+      if (alternative && findGuest.get(current.id, identity)?.decision === 'denied') {
+        throw new RequestError(403, 'The host has declined your request.');
       }
       if (isHost && current.encrypted && !input.keyReady) return { state: 'key-required' };
       if (!isHost) {
         let guest = findGuest.get(current.id, identity);
         if (guest?.decision === 'denied') throw new RequestError(403, 'The host has declined your request.');
-        if (current.locked) throw new RequestError(423, 'The host has locked the meeting.');
+        if (current.locked && reclaimOrganizer(current) !== identity) throw new RequestError(423, 'The host has locked the meeting.');
         if (!guest && !verified) throw new RequestError(403, 'Enter the correct meeting passcode.');
         if (!guest) {
           db.prepare('INSERT INTO attendance(meeting, identity, name, decision, requested_at) VALUES(?, ?, ?, ?, ?)')
@@ -807,14 +832,30 @@ export function createApp(options, dependencies = {}) {
         if (!current.opened_at || guest.decision !== 'admitted') return { state: 'waiting', hostPresent: !!current.opened_at };
         if (current.encrypted && !input.keyReady) return { state: 'key-required' };
         assignScheduledBreakout(current, guest);
-      } else if (!current.opened_at) {
+      } else if (!alreadyOpen) {
         await ensureMediaRoom(current.id);
-        start.run(Date.now(), current.id);
-        log.run(current.id, identity, 'open', null, Date.now());
+        const now = Date.now();
+        if (alternative) {
+          db.exec('BEGIN IMMEDIATE');
+          try {
+            if (!startAsAlternative.run(now, identity, current.id).changes) throw new RequestError(409, 'The meeting opened. Try joining again.');
+            addPreviousHost.run(current.id, current.owner, current.owner_name, now);
+            admitAlternative.run(current.id, identity, input.name, now);
+            log.run(current.id, identity, 'open-as-alternative', current.owner, now);
+            db.exec('COMMIT');
+          } catch (error) {
+            db.exec('ROLLBACK');
+            throw error;
+          }
+          current = findMeeting.get(current.id);
+        } else {
+          if (!start.run(now, current.id).changes) throw new RequestError(409, 'The meeting opened. Try joining again.');
+          log.run(current.id, identity, 'open', null, now);
+        }
       }
       const location = currentLocation(current.id, identity);
       // Recreate an idle room with the same capacity after LiveKit expires it.
-      if (current.opened_at) await ensureMediaRoom(location.roomId);
+      if (alreadyOpen) await ensureMediaRoom(location.roomId);
       const attendance = findGuest.get(current.id, identity);
       const name = attendance?.name ?? current.owner_name;
       const token = await mediaToken(location.roomId, identity, name, moderatorRoomMetadata(current.id, identity, location.roomId));
@@ -932,7 +973,7 @@ export function createApp(options, dependencies = {}) {
     const byEmail = new Map(scheduled.map(item => [item.key, item]));
     const participants = await media(client => client.listParticipants(meeting.id));
     for (const participant of participants) {
-      if (participant.state !== ParticipantInfo_State.ACTIVE || participant.identity === activeHost(meeting) ||
+      if (participant.state !== ParticipantInfo_State.ACTIVE || reservedMainRoom(meeting, participant.identity) ||
           findCoHost.get(meeting.id, participant.identity)?.sid === participant.sid) continue;
       const guest = findGuest.get(meeting.id, participant.identity);
       if (guest?.decision !== 'admitted') continue;
@@ -957,7 +998,7 @@ export function createApp(options, dependencies = {}) {
         admit(current, command.identity);
         const location = currentLocation(current.id, command.identity);
         if (location.roomId !== command.from) throw new RequestError(409, 'That attendee changed rooms. Refresh and try again.');
-        if (location.moderatorVisit || command.identity === activeHost(current) ||
+        if (location.moderatorVisit || reservedMainRoom(current, command.identity) ||
             moderatorRoomMetadata(current.id, command.identity, location.roomId) || await isActiveCoHost(current, command.identity)) {
           throw new RequestError(403, 'Hosts and co-hosts choose which rooms to visit.');
         }
@@ -1005,8 +1046,8 @@ export function createApp(options, dependencies = {}) {
         }
         for (const identity of identities) admit(current, identity);
         for (const identity of identities) {
-          if (identity === activeHost(current) || await isActiveCoHost(current, identity)) {
-            throw new RequestError(409, 'Hosts and connected co-hosts can visit rooms after they open.');
+          if (reservedMainRoom(current, identity) || await isActiveCoHost(current, identity)) {
+            throw new RequestError(409, 'Keep hosts, co-hosts, and the organizer who can reclaim control out of attendee assignments.');
           }
         }
         await cloud?.stopMeeting(current, 'Breakout rooms opened.');
@@ -1028,6 +1069,12 @@ export function createApp(options, dependencies = {}) {
       const hostIdentity = activeHost(current);
       const host = hostIdentity === req.identity;
       const { roomId } = currentLocation(current.id, req.identity);
+      if (command.action === 'reclaim-host') {
+        if (meetingEnded(current)) throw new RequestError(410, 'This meeting has ended.');
+        if (reclaimOrganizer(current) !== req.identity) throw new RequestError(403, 'Host control can no longer be reclaimed.');
+        if (!(await mainParticipant(current, req.identity))) throw new RequestError(409, 'Connect to the main room before reclaiming host control.');
+        return meetingRoles(await changeHost(current, req.identity, command.action, { actor: req.identity }));
+      }
       if (['end', 'co-host', 'transfer-host'].includes(command.action)) requireHost(current, req.identity);
       else await requireModerator(current, req.identity);
       if (command.action === 'end') {
@@ -1071,6 +1118,9 @@ export function createApp(options, dependencies = {}) {
           (command.identity === hostIdentity ||
            (!host && (command.identity === req.identity || await isActiveCoHost(current, command.identity))))) {
         throw new RequestError(403, 'That participant is protected from this action.');
+      }
+      if (['wait', 'remove'].includes(command.action) && command.identity === reclaimOrganizer(current)) {
+        throw new RequestError(403, 'The organizer can stay in the room while they decide whether to reclaim host control.');
       }
       if (command.action === 'lock') db.prepare('UPDATE meetings SET locked = ? WHERE id = ?').run(Number(command.locked), current.id);
       if (command.action === 'decide') {

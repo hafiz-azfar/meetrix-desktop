@@ -83,7 +83,10 @@ function MeetingForm({ mode, meeting, api, name, close, onCreated }) {
       const scheduled = mode !== 'start';
       const details = { title: form.get('title'), duration: Number(form.get('duration') || 60) };
       const times = scheduled ? selectedDates().map(time => time.toISOString()) : [];
-      if (scheduled) details.startAt = times[0];
+      if (scheduled) {
+        details.startAt = times[0];
+        details.alternativeHosts = String(form.get('alternativeHosts') || '').split(',').map(email => email.trim()).filter(Boolean);
+      }
       if (mode === 'edit') {
         if (when === localDateValue(meeting.startAt)) details.startAt = new Date(meeting.startAt).toISOString();
         onCreated(await api('/meetings/' + meeting.id, { method: 'PATCH', body: details }), true);
@@ -151,6 +154,11 @@ function MeetingForm({ mode, meeting, api, name, close, onCreated }) {
       <label className="check"><input type="checkbox" name="lobby" defaultChecked /><span><strong>Waiting room</strong><small>Admit each guest before they join.</small></span></label>
       <label className="check"><input type="checkbox" name="allowGuests" /><span><strong>Allow guests without an account</strong><small>The waiting room must be enabled.</small></span></label>
       <label className="check"><input type="checkbox" name="encrypted" /><span><strong>End-to-end encrypted room</strong><small>Share a separate room key with guests. Server-stored collaboration is disabled.</small></span></label></>}
+      {mode !== 'start' && <label>Alternative host emails (optional)
+        <input type="email" name="alternativeHosts" multiple maxLength={1278} autoComplete="off"
+          defaultValue={(meeting?.alternativeHosts ?? []).join(', ')} />
+        <small>Enter up to five addresses separated by commas. Share the meeting invite with these people.</small>
+      </label>}
       {(error || scheduleError) && <p className="error" role="alert">{error || scheduleError}</p>}
       <div className="dialog-actions"><button className="button" type="button" onClick={close}>Cancel</button><button className="button primary" disabled={working || Boolean(scheduleError)}>{working ? 'Saving…' : mode === 'edit' ? 'Save changes' : mode === 'schedule' ? 'Schedule' : 'Continue'}</button></div>
     </form>

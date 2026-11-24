@@ -75,7 +75,14 @@ async function fixture(t, authFixture) {
   const create = input => api('/meetings', { method: 'POST', body: { title: 'Roadmap', name: 'Owner', ...input } });
   const connect = (id, token, input = {}) => api('/meetings/' + id + '/connect', { method: 'POST', token, body: { name: token, ...input } });
   const moderate = (id, body, token = 'owner') => api('/meetings/' + id + '/moderate', { method: 'POST', body, token });
-  return { api, create, connect, moderate, calls, packets, livePeople, failedRemovals, failedLookups, checkHostContinuity };
+  async function signIn(email) {
+    const reply = await api.request('/auth/email/password', { method: 'POST', body: { email, password: 'fixture-password' } });
+    assert.equal(reply.status, 200);
+    const cookie = reply.headers.get('set-cookie').split(';')[0];
+    const session = (await api('/desktop-auth/session', { cookie })).json.user;
+    return { cookie, identity: session.id };
+  }
+  return { api, create, connect, moderate, signIn, calls, packets, livePeople, failedRemovals, failedLookups, checkHostContinuity };
 }
 
 test('InsForge and LiveKit production configuration are pinned', () => {
@@ -212,24 +219,110 @@ test('scheduled breakout plans are private and load after starting a standard me
   assert.equal((await api('/meetings/' + encrypted.id + '/breakout-plan', { method: 'PATCH', body: { plan } })).status, 404);
 });
 
+test('verified alternative hosts can start a locked-down meeting and the connected organizer can reclaim it', async t => {
+  const verifiedEmail = 'alternate@example.test';
+  const unverifiedEmail = 'unverified@example.test';
+  const { api, create, connect, moderate, signIn, livePeople } = await fixture(t, () => ({
+    async signInWithPassword({ email }) {
+      return { data: { accessToken: 'fixture-token', user: { email, emailVerified: email === verifiedEmail,
+        id: email === verifiedEmail ? '4e5c7bb9-0218-4d57-b9c0-4ff45db24395' : 'd338dd36-66ed-4dba-8f37-ddc3af85a041' } } };
+    },
+  }));
+  const [alternate, unverified] = await Promise.all([signIn(verifiedEmail), signIn(unverifiedEmail)]);
+  const startAt = new Date(Date.now() + 3600_000).toISOString();
+  const passcode = 'fixture passcode';
+  assert.equal((await create({ alternativeHosts: [verifiedEmail] })).status, 400);
+  assert.equal((await create({ startAt, alternativeHosts: [verifiedEmail, verifiedEmail.toUpperCase()] })).status, 400);
+  const created = await create({ startAt, passcode, allowGuests: true, alternativeHosts: [verifiedEmail.toUpperCase(), unverifiedEmail] });
+  assert.equal(created.status, 201);
+  assert.deepEqual(created.json.alternativeHosts, [verifiedEmail, unverifiedEmail]);
+  const { id } = created.json;
+  const path = '/meetings/' + id;
+  const as = (account, endpoint, body, method = 'POST') => api(path + endpoint, { cookie: account.cookie, method, body });
+  assert.deepEqual((await api('/meetings', { cookie: alternate.cookie })).json, []);
+  assert.equal((await as(alternate, '', { title: 'Alter', startAt, duration: 60 }, 'PATCH')).status, 403);
+  assert.equal((await as(alternate, '/moderate', { action: 'end' })).status, 403);
+  assert.equal((await as(unverified, '/connect', { name: 'Unverified', passcode })).json.state, 'waiting');
+  const accountless = await api(path + '/guest', { token: '', method: 'POST', body: {
+    name: verifiedEmail, proof: '2532e017fbe74e198d11f4422be6bc8e', passcode,
+  } });
+  assert.equal(accountless.json.state, 'waiting');
+  assert.equal((await api('/meetings')).json[0].openedAt, null);
+
+  const opened = await as(alternate, '/connect', { name: 'Backup host' });
+  assert.equal(opened.status, 200);
+  assert.equal(opened.json.state, 'ready');
+  assert.equal(opened.json.meeting.isHost, true);
+  assert.equal(opened.json.meeting.ownerName, 'Owner');
+  assert.equal(opened.json.meeting.alternativeHosts, undefined);
+  assert.equal(opened.json.hostVersion, 1);
+  assert.equal(opened.json.hostIdentity, alternate.identity);
+  assert.equal((await as(unverified, '/connect', { name: 'Unverified', passcode })).json.state, 'waiting');
+  assert.equal((await as(alternate, '/moderate', { action: 'reclaim-host' })).status, 403);
+  assert.equal((await as(alternate, '/moderate', { action: 'lock', locked: true })).status, 200);
+  for (const action of ['wait', 'remove']) assert.equal((await as(alternate, '/moderate', { action, identity: 'owner' })).status, 403);
+  assert.equal((await as(alternate, '/breakouts', { action: 'open', rooms: [{ name: 'Review', members: ['owner'] }] })).status, 409);
+
+  const organizer = await connect(id, 'owner');
+  assert.equal(organizer.json.state, 'ready');
+  assert.equal(organizer.json.meeting.isHost, false);
+  assert.equal(organizer.json.meeting.reclaimOrganizer, 'owner');
+  assert.equal((await moderate(id, { action: 'end' })).status, 403);
+  assert.equal((await moderate(id, { action: 'reclaim-host' })).status, 409);
+  livePeople.set('owner', { identity: 'owner', sid: 'PA_owner', state: ParticipantInfo_State.ACTIVE });
+  const reclaimed = await moderate(id, { action: 'reclaim-host' });
+  assert.equal(reclaimed.status, 200);
+  assert.equal(reclaimed.json.hostIdentity, 'owner');
+  assert.equal(reclaimed.json.hostVersion, 2);
+  assert.equal((await moderate(id, { action: 'reclaim-host' })).status, 403);
+  assert.equal((await as(alternate, '/moderate', { action: 'end' })).status, 403);
+  assert.equal((await moderate(id, { action: 'end' })).status, 200);
+});
+
+test('alternative host changes are occurrence-specific and encrypted starts still require a room key', async t => {
+  const email = 'delegate@example.test';
+  const { api, create, connect, signIn } = await fixture(t, () => ({
+    async signInWithPassword() {
+      return { data: { accessToken: 'fixture-token', user: { id: '4e5c7bb9-0218-4d57-b9c0-4ff45db24395', email, emailVerified: true } } };
+    },
+  }));
+  const { cookie, identity } = await signIn(email);
+  const startAt = new Date(Date.now() + 3600_000).toISOString();
+  const later = new Date(Date.now() + 86400_000).toISOString();
+  const created = await create({ startAt, additionalStarts: [later], encrypted: true, alternativeHosts: [email] });
+  const [first, second] = created.json.scheduledMeetings;
+  const revise = (meeting, alternatives) => api('/meetings/' + meeting.id, { method: 'PATCH', body: {
+    title: meeting.title, duration: meeting.duration, startAt: new Date(meeting.startAt).toISOString(),
+    ...(alternatives ? { alternativeHosts: alternatives } : {}),
+  } });
+  assert.deepEqual((await revise(first)).json.alternativeHosts, [email]);
+  assert.equal((await revise(second, [])).json.alternativeHosts, undefined);
+  const joinAsAlternative = (meeting, keyReady) => api('/meetings/' + meeting.id + '/connect', {
+    cookie, method: 'POST', body: { name: 'Delegate', keyReady },
+  });
+  assert.equal((await joinAsAlternative(second, true)).json.state, 'waiting');
+  assert.equal((await joinAsAlternative(first, false)).json.state, 'key-required');
+  assert.ok((await api('/meetings')).json.every(meeting => meeting.openedAt === null));
+  const opened = (await joinAsAlternative(first, true)).json;
+  assert.equal(opened.hostIdentity, identity);
+  assert.equal(opened.meeting.encrypted, true);
+  assert.ok(opened.token);
+  assert.equal((await revise(first, [])).status, 409);
+  assert.equal((await connect(second.id, 'owner', { keyReady: true })).json.hostIdentity, 'owner');
+  assert.equal((await joinAsAlternative(second, true)).json.state, 'waiting');
+});
+
 test('scheduled breakout rosters match verified sign-ins only after normal admission', async t => {
   const addresses = {
     'present@example.test': { id: '4e5c7bb9-0218-4d57-b9c0-4ff45db24395', emailVerified: true },
     'later@example.test': { id: 'd338dd36-66ed-4dba-8f37-ddc3af85a041', emailVerified: true },
     'unverified@example.test': { id: '454f7cfb-ced7-47e0-a76b-005b149c2323', emailVerified: false },
   };
-  const { api, create, connect, moderate, livePeople } = await fixture(t, () => ({
+  const { api, create, connect, moderate, livePeople, signIn } = await fixture(t, () => ({
     async signInWithPassword({ email }) {
       return { data: { accessToken: 'fixture-token', user: { ...addresses[email], email } } };
     },
   }));
-  async function signIn(email) {
-    const reply = await api.request('/auth/email/password', { method: 'POST', body: { email, password: 'fixture-password' } });
-    assert.equal(reply.status, 200);
-    const cookie = reply.headers.get('set-cookie').split(';')[0];
-    const session = (await api('/desktop-auth/session', { cookie })).json.user;
-    return { cookie, identity: session.id };
-  }
   const [present, later, unverified] = await Promise.all(Object.keys(addresses).map(signIn));
   const meeting = (await create({})).json;
   const uri = '/meetings/' + meeting.id;

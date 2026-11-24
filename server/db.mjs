@@ -271,6 +271,8 @@ export function openDatabase(filename) {
   const columns = new Set(db.prepare('PRAGMA table_info(meetings)').all().map(column => column.name));
   if (!columns.has('host_identity')) db.exec('ALTER TABLE meetings ADD COLUMN host_identity TEXT');
   if (!columns.has('host_version')) db.exec('ALTER TABLE meetings ADD COLUMN host_version INTEGER NOT NULL DEFAULT 0');
+  if (!columns.has('alternative_hosts')) db.exec('ALTER TABLE meetings ADD COLUMN alternative_hosts TEXT');
+  if (!columns.has('alternative_host_started')) db.exec('ALTER TABLE meetings ADD COLUMN alternative_host_started INTEGER NOT NULL DEFAULT 0');
   if (!columns.has('duration_minutes')) db.exec('ALTER TABLE meetings ADD COLUMN duration_minutes INTEGER NOT NULL DEFAULT 60');
   if (!columns.has('series_id')) db.exec('ALTER TABLE meetings ADD COLUMN series_id TEXT');
   if (!columns.has('series_index')) db.exec('ALTER TABLE meetings ADD COLUMN series_index INTEGER');

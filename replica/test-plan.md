@@ -88,6 +88,8 @@
 | F46-N1 | An encrypted placement key alone cannot request a signed-in attendee's grant. Readmission is room-scoped and accountless users cannot become host | API tests |
 | F47-H1 | An encrypted co-host can moderate and succeed the host after the reconnect window. A microphone request leaves the recipient muted until they act | API and encrypted moderation smoke tests |
 | F47-N1 | Revoked and replaced media sessions lose delegated controls. An accountless guest cannot receive co-host access, and encrypted co-hosts cannot open breakout rooms | API and encrypted moderation smoke tests |
+| F48-H1 | A verified alternative host can start a scheduled room from its invite. The organizer can join it while locked and reclaim host control | `node test/smoke-alternative-host.mjs`. Set `MEETRIX_SMOKE_ENCRYPTED=1` to repeat with encrypted media |
+| F48-N1 | Accountless and unverified attendees cannot start meetings. Editing one occurrence preserves the other rosters, and encrypted starts require the room key | API tests |
 | F12-P1 | 100-person load, 30-hour duration, and production availability | Deployment-scale verification |
 
 Run `npm test` for the API suite. The RTC tests use two isolated browser pages and a real loopback LiveKit server. The desktop test is aimed at the Windows development build.

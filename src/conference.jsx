@@ -191,7 +191,9 @@ function Call({ session, api, prefs, updatePrefs, onLeave, recap, connectionErro
   const collaboration = meetingTools && !session.accountless;
   const delegates = new Map(coHosts.map(({ identity, sid }) => [identity, sid]));
   const isCoHost = participant => !!participant.sid && delegates.get(participant.identity) === participant.sid;
-  const roleOf = participant => participant.identity === hostIdentity ? 'Host' : isCoHost(participant) ? 'Co-host' : '';
+  const reclaimOrganizer = hostVersion === 1 ? session.meeting.reclaimOrganizer : undefined;
+  const roleOf = participant => participant.identity === hostIdentity ? 'Host' : isCoHost(participant) ? 'Co-host' :
+    participant.identity === reclaimOrganizer ? 'Organizer' : '';
   const coHost = online && !host && !session.accountless && isCoHost(localParticipant);
   const canModerate = host || coHost;
   const canManageBreakouts = !session.meeting.encrypted && canModerate;
@@ -612,6 +614,9 @@ function Call({ session, api, prefs, updatePrefs, onLeave, recap, connectionErro
       {online && host && hostVersion > 0 && <span className="breakout-indicator" role="status">You’re the host</span>}</div>
       <div className="call-header-actions">
         {session.meeting.encrypted && <span className="button subtle"><ShieldCheck size={16} /> Encrypted media</span>}
+        {online && !host && reclaimOrganizer === localParticipant.identity && <button className="button" onClick={() => {
+          if (window.confirm('Reclaim host controls for this meeting?')) moderate({ action: 'reclaim-host' });
+        }}><Crown size={16} /> Reclaim host</button>}
         {session.moderatorVisit && <button className="button" disabled={!online || visiting}
           onClick={() => visitBreakout(null)}>Return to main meeting</button>}
         {session.breakoutName && session.routingKey && !canModerate && !session.moderatorVisit && <button className="button" disabled={!online || requestingHelp}
@@ -684,18 +689,18 @@ function Call({ session, api, prefs, updatePrefs, onLeave, recap, connectionErro
             {canTransferHost && !participant.isLocal && !participant.identity.startsWith('guest_') && <button className="icon-button"
               disabled={!online || !participant.sid} title="Transfer host" aria-label={'Transfer host to ' + participant.name}
               onClick={() => transferHost(participant)}><Crown size={17} /></button>}
-            {canModerate && !participant.isLocal && (host || !roleOf(participant)) && <>
+            {canModerate && !participant.isLocal && (host || participant.identity !== hostIdentity && !isCoHost(participant)) && <>
               {participant.isMicrophoneEnabled || !mainRoom
                 ? <button className="icon-button" title="Mute participant" aria-label={'Mute ' + participant.name} onClick={() => moderate({ action: 'mute', identity: participant.identity })}><MicOff size={17} /></button>
                 : <button className="icon-button" title="Ask to unmute" aria-label={'Ask ' + participant.name + ' to unmute'} onClick={() => moderate({ action: 'ask-unmute', identity: participant.identity })}><Mic size={17} /></button>}
               {participant.isCameraEnabled && <button className="icon-button" title="Stop camera" aria-label={'Stop camera for ' + participant.name}
                 onClick={() => moderate({ action: 'stop-video', identity: participant.identity })}><VideoOff size={17} /></button>}
-              <button className="icon-button" title="Move to waiting room"
+              {participant.identity !== reclaimOrganizer && <><button className="icon-button" title="Move to waiting room"
                 aria-label={'Move ' + (participant.name || 'Guest') + ' to waiting room'}
                 onClick={() => moveToWaitingRoom(participant)}><Hourglass size={17} /></button>
               <button className="icon-button" title="Remove participant" aria-label={'Remove ' + participant.name} onClick={() => {
                 if (window.confirm('Remove this participant and block them from rejoining?')) moderate({ action: 'remove', identity: participant.identity });
-              }}><UserMinus size={17} /></button>
+              }}><UserMinus size={17} /></button></>}
             </>}
           </div>)}</div>
         </>}
