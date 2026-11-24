@@ -280,16 +280,28 @@ export function createApp(options, dependencies = {}) {
       const current = findMeeting.get(initial.id);
       if (meetingEnded(current)) throw new RequestError(410, 'This meeting has ended.');
       const identity = breakouts.identity(current.id, input.key);
-      const participant = identity && findGuest.get(current.id, identity);
-      if (input.breakoutRoomId === undefined && !current.encrypted && participant?.decision === 'pending') {
+      if (!identity) throw new RequestError(403, 'Your meeting session is no longer active.');
+      if (current.encrypted) {
+        if (input.roomId !== current.id || input.breakoutRoomId !== undefined) {
+          throw new RequestError(403, 'Encrypted meetings only use their main room.');
+        }
+        if (!identity.startsWith('guest_') && await placementIdentity(req) !== identity) {
+          throw new RequestError(403, 'Use your signed-in session to continue in the encrypted meeting.');
+        }
+      }
+      const participant = findGuest.get(current.id, identity);
+      if (input.breakoutRoomId === undefined && participant?.decision === 'pending') {
         return { waiting: true, placementEpoch: participant.placement_epoch };
       }
-      if (!identity || current.encrypted || (identity !== activeHost(current) && participant?.decision !== 'admitted')) {
+      if (identity !== activeHost(current) && participant?.decision !== 'admitted') {
         throw new RequestError(403, 'Your meeting session is no longer active.');
       }
       if (input.breakoutRoomId === undefined) assignScheduledBreakout(current, participant);
       const target = currentLocation(current.id, identity);
       const placementEpoch = participant?.placement_epoch ?? 0;
+      if (current.encrypted && input.placementEpoch > placementEpoch) {
+        throw new RequestError(409, 'Your meeting admission changed. Rejoin the meeting.');
+      }
       if (input.breakoutRoomId !== undefined) {
         if (target.roomId !== input.roomId || placementEpoch !== input.placementEpoch) {
           throw new RequestError(409, 'Your breakout placement changed. Try again from your current room.');
@@ -298,8 +310,7 @@ export function createApp(options, dependencies = {}) {
       }
       const handoff = moderatorRoomMetadata(current.id, identity, target.roomId);
       if (handoff) {
-        const account = req.get('authorization') ? await bearerAccount(req) : desktopAuth.session(req);
-        if ((typeof account === 'string' ? account : account?.identity) !== identity) {
+        if (await placementIdentity(req) !== identity) {
           throw new RequestError(403, 'Use your signed-in session to continue as co-host.');
         }
         await isActiveCoHost(current, identity);
@@ -342,6 +353,10 @@ export function createApp(options, dependencies = {}) {
     if (!token) throw new RequestError(401, 'Sign in to continue.');
     try { return await authenticate(token); }
     catch { throw new RequestError(401, 'Your sign-in has expired or could not be verified.'); }
+  }
+  async function placementIdentity(req) {
+    const account = req.get('authorization') ? await bearerAccount(req) : desktopAuth.session(req);
+    return typeof account === 'string' ? account : account?.identity;
   }
   api.use(async (req, _res, next) => {
     if (req.get('authorization')) {
@@ -586,6 +601,7 @@ export function createApp(options, dependencies = {}) {
         roomId === meeting.id || breakouts.assigned(meeting.id, identity)?.id === roomId) };
   }
   function signalHostTransfer(meeting) {
+    if (meeting.encrypted) return signalPlacement(meeting.id);
     const data = new TextEncoder().encode(JSON.stringify({
       hostIdentity: activeHost(meeting), hostVersion: meeting.host_version,
     }));
@@ -802,7 +818,7 @@ export function createApp(options, dependencies = {}) {
       const attendance = findGuest.get(current.id, identity);
       const name = attendance?.name ?? current.owner_name;
       const token = await mediaToken(location.roomId, identity, name, moderatorRoomMetadata(current.id, identity, location.roomId));
-      const routingKey = current.encrypted ? undefined : breakouts.issueKey(current.id, identity);
+      const routingKey = breakouts.issueKey(current.id, identity);
       const breakoutChoices = await availableBreakouts(current, identity);
       const closesAt = location.breakoutName ? breakouts.closesAt(current.id) : null;
       return { state: 'ready', serverUrl: livekitUrl, token, ...location, routingKey,
@@ -1020,7 +1036,6 @@ export function createApp(options, dependencies = {}) {
       }
       if (meetingEnded(current)) throw new RequestError(410, 'This meeting has ended.');
       if (command.action === 'transfer-host') {
-        if (current.encrypted) throw new RequestError(403, 'Host transfer is unavailable in encrypted meetings.');
         if (!current.opened_at || roomId !== current.id || command.identity === hostIdentity || command.identity.startsWith('guest_')) {
           throw new RequestError(409, 'Choose another signed-in participant in the main meeting.');
         }
@@ -1066,7 +1081,6 @@ export function createApp(options, dependencies = {}) {
         setDecision.run(command.admit ? 'admitted' : 'denied', current.id, command.identity);
       }
       if (command.action === 'wait') {
-        if (current.encrypted) throw new RequestError(403, 'Moving participants to the waiting room is unavailable in encrypted meetings.');
         const guest = findGuest.get(current.id, command.identity);
         if (!guest?.waiting_evicting) {
           admit(current, command.identity);

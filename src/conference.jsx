@@ -195,7 +195,8 @@ function Call({ session, api, prefs, updatePrefs, onLeave, recap, connectionErro
   const canModerate = host || coHost;
   const canManageBreakouts = !session.meeting.encrypted && canModerate;
   const canOpenBreakouts = canManageBreakouts || breakoutChoices.length > 0;
-  const hostCandidates = confirmation && host && meetingTools && online
+  const canTransferHost = host && !session.breakoutName;
+  const hostCandidates = confirmation && canTransferHost && online
     ? participants.filter(participant => !participant.isLocal && participant.sid && !participant.identity.startsWith('guest_')) : [];
   const selectedHost = hostCandidates.find(participant => participant.identity === nextHost);
   const pushToTalk = usePushToTalk(room, {
@@ -302,7 +303,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, recap, connectionErro
     function receive(payload, participant, _kind, topic, _encryption, senderIdentity) {
       const serverPacket = !participant && !senderIdentity;
       if (serverPacket && topic === placementTopic) { refreshPlacement(); return; }
-      if (serverPacket && topic === hostRolesTopic && payload.byteLength <= 256) {
+      if (serverPacket && topic === hostRolesTopic && !session.meeting.encrypted && payload.byteLength <= 256) {
         try { updateRoles(JSON.parse(decoder.decode(payload))); } catch { /* Ignore malformed role updates. */ }
         refreshPlacement();
         return;
@@ -349,7 +350,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, recap, connectionErro
       room.off(RoomEvent.Connected, refreshPlacement);
       room.off(RoomEvent.Disconnected, refreshPlacement);
     };
-  }, [room, refreshPlacement, session.breakoutName, meetingTools, canModerate, updateRoles]);
+  }, [room, refreshPlacement, session.meeting.encrypted, session.breakoutName, meetingTools, canModerate, updateRoles]);
   useEffect(() => { chartEnd.current?.scrollIntoView({ block: 'nearest' }); }, [chat, panel]);
   useEffect(() => {
     if (!reaction) return;
@@ -678,7 +679,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, recap, connectionErro
               }}>
               {isCoHost(participant) ? <ShieldMinus size={17} /> : <ShieldPlus size={17} />}
             </button>}
-            {host && meetingTools && !participant.isLocal && !participant.identity.startsWith('guest_') && <button className="icon-button"
+            {canTransferHost && !participant.isLocal && !participant.identity.startsWith('guest_') && <button className="icon-button"
               disabled={!online || !participant.sid} title="Transfer host" aria-label={'Transfer host to ' + participant.name}
               onClick={() => transferHost(participant)}><Crown size={17} /></button>}
             {canModerate && !participant.isLocal && (host || !roleOf(participant)) && <>
@@ -687,9 +688,9 @@ function Call({ session, api, prefs, updatePrefs, onLeave, recap, connectionErro
                 : <button className="icon-button" title="Ask to unmute" aria-label={'Ask ' + participant.name + ' to unmute'} onClick={() => moderate({ action: 'ask-unmute', identity: participant.identity })}><Mic size={17} /></button>}
               {participant.isCameraEnabled && <button className="icon-button" title="Stop camera" aria-label={'Stop camera for ' + participant.name}
                 onClick={() => moderate({ action: 'stop-video', identity: participant.identity })}><VideoOff size={17} /></button>}
-              {!session.meeting.encrypted && <button className="icon-button" title="Move to waiting room"
+              <button className="icon-button" title="Move to waiting room"
                 aria-label={'Move ' + (participant.name || 'Guest') + ' to waiting room'}
-                onClick={() => moveToWaitingRoom(participant)}><Hourglass size={17} /></button>}
+                onClick={() => moveToWaitingRoom(participant)}><Hourglass size={17} /></button>
               <button className="icon-button" title="Remove participant" aria-label={'Remove ' + participant.name} onClick={() => {
                 if (window.confirm('Remove this participant and block them from rejoining?')) moderate({ action: 'remove', identity: participant.identity });
               }}><UserMinus size={17} /></button>

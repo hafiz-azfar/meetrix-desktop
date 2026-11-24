@@ -1128,6 +1128,66 @@ test('host succession follows moderators into breakout rooms and signals both ro
   assert.equal((await status()).json.roomId, id);
 });
 
+test('encrypted host transfer and readmission preserve session, room and role boundaries', async t => {
+  const { api, create, connect, moderate, calls, livePeople } = await fixture(t);
+  const { id } = (await create({ encrypted: true, allowGuests: true })).json;
+  const path = '/meetings/' + id;
+  const owner = (await connect(id, 'owner', { keyReady: true })).json;
+  assert.equal((await connect(id, 'guest', { keyReady: true })).json.state, 'waiting');
+  assert.equal((await moderate(id, { action: 'decide', identity: 'guest', admit: true })).status, 200);
+  assert.equal((await connect(id, 'guest')).json.state, 'key-required');
+  const guest = (await connect(id, 'guest', { keyReady: true })).json;
+  const place = (session, token, options = {}) => api(path + '/placement', {
+    method: 'POST', token, body: { key: session.routingKey, roomId: id, placementEpoch: session.placementEpoch, ...options },
+  });
+  assert.equal((await place(guest, '')).status, 403);
+  assert.equal((await place(guest, 'owner')).status, 403);
+  assert.equal((await place(guest, 'guest', { roomId: 'aaaaaaaaaaaaaaaa' })).status, 403);
+  assert.equal((await place(guest, 'guest', { breakoutRoomId: null })).status, 403);
+  assert.equal((await place(guest, 'guest', { placementEpoch: 100 })).status, 409);
+  assert.equal((await place(guest, 'guest')).json.token, undefined);
+
+  const device = { name: 'Anonymous attendee', proof: '2532e017fbe74e198d11f4422be6bc8e', keyReady: true };
+  const joinGuest = () => api(path + '/guest', { method: 'POST', token: '', body: device });
+  assert.equal((await joinGuest()).json.state, 'waiting');
+  const lobby = (await api(path + '/lobby')).json;
+  const visitorIdentity = lobby.guests.find(visitor => visitor.accountless).identity;
+  await moderate(id, { action: 'decide', identity: visitorIdentity, admit: true });
+  const visitor = (await joinGuest()).json;
+  assert.equal((await place(visitor, '')).status, 200);
+  assert.equal((await moderate(id, { action: 'transfer-host', identity: visitorIdentity, sid: 'PA_visitor' })).status, 409);
+  assert.equal((await moderate(id, { action: 'co-host', identity: 'guest', sid: 'PA_guest', enabled: true })).status, 403);
+
+  assert.equal((await moderate(id, { action: 'wait', identity: 'guest' })).status, 200);
+  assert.deepEqual((await place(guest, 'guest')).json, { waiting: true, placementEpoch: 1 });
+  assert.equal((await connect(id, 'guest', { keyReady: true })).json.state, 'waiting');
+  assert.ok(calls.some(([kind, room, actor, options]) => kind === 'remove' && room === id && actor === 'guest' && typeof options.revokeTokenTs === 'bigint'));
+  await moderate(id, { action: 'decide', identity: 'guest', admit: true });
+  const resumed = (await place(guest, 'guest')).json;
+  const claims = await new TokenVerifier(livekitKey, livekitSecret).verify(resumed.token);
+  assert.equal(resumed.placementEpoch, 1);
+  assert.equal(claims.sub, 'guest');
+  assert.equal(claims.video.room, id);
+  assert.ok(!claims.video.roomAdmin && !claims.video.roomRecord);
+  livePeople.set('guest', { sid: 'PA_readmitted', state: ParticipantInfo_State.ACTIVE });
+  const transfer = { action: 'transfer-host', identity: 'guest', sid: 'PA_readmitted' };
+  assert.equal((await moderate(id, transfer, 'guest')).status, 403);
+  assert.equal((await moderate(id, { ...transfer, sid: 'PA_old' })).status, 409);
+  assert.equal((await moderate(id, transfer)).status, 200);
+  const roles = (await place(owner, 'owner')).json;
+  assert.equal(roles.hostVersion, 1);
+  assert.equal(roles.hostIdentity, 'guest');
+  assert.equal(roles.token, undefined);
+  assert.equal((await moderate(id, { action: 'end' })).status, 403);
+  assert.equal((await moderate(id, { action: 'wait', identity: 'owner' }, 'guest')).status, 200);
+  assert.ok((await place(owner, 'owner')).json.waiting);
+  await moderate(id, { action: 'decide', identity: 'owner', admit: false }, 'guest');
+  assert.equal((await place(owner, 'owner')).status, 403);
+  assert.equal((await api(path + '/notes', { token: 'guest' })).status, 403);
+  assert.equal((await moderate(id, { action: 'end' }, 'guest')).status, 200);
+  assert.equal((await place(guest, 'guest')).status, 410);
+});
+
 test('shared notes require access and reject stale writes; encrypted rooms skip stored notes', async t => {
   const { api, create, connect } = await fixture(t);
   const meeting = (await create({})).json;

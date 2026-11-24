@@ -1,4 +1,4 @@
-# Meetrix 0.1.23 feature comparison
+# Meetrix 0.1.24 feature comparison
 
 | Area | Meetrix coverage | Remaining scope |
 |---|---|---|
@@ -7,7 +7,7 @@
 | Media preferences | Microphone meter and playback, test tone and volume, noise reduction, mirrored camera preview, local image backgrounds and blur, screen-share options, and Windows system audio with a display or as an audio-only share | Video backgrounds, green-screen controls, image filters, audio profiles, and native driver and hardware options |
 | In-call display and diagnostics | Fullscreen, elapsed-time display, participant filters, local camera pause, presentation layout, sampled WebRTC metrics with codec and jitter when available, local JSON export, and configurable push-to-talk | Dual-window layouts and broader network diagnostics |
 | Collaboration | In-room chat, raised hands, reactions, polls, whiteboard, notes, persistent team chat with threaded replies and scoped file downloads, presentation annotation tools and PNG export, and breakout rooms with pre-assignment, live reassignment, moderator visits, self-selection, timed returns, live voice announcements, and help requests | Individual annotation selection and editing, larger chat files, and inline previews |
-| Host controls | Waiting room re-entry and readmission, passcodes, lock, individual and bulk mute, ask to unmute, stop camera, remove, end, revocable co-host access, explicit host transfer, assign-and-leave, and automatic succession to a connected co-host in standard meetings | Transfer and waiting room re-entry in encrypted meetings, organization-wide policy, and independent security evaluation |
+| Host controls | Waiting room re-entry, readmission, explicit host transfer, and assign-and-leave in standard and encrypted meetings. Passcodes, lock, mute, stop camera, remove, and end. Standard meetings also support co-hosts, automatic succession, and requests to unmute | Encrypted co-hosts and automatic succession, organization-wide policy, and independent security evaluation |
 | Recording and captions | Local WebM, opt-in hosted Egress and private MP4 downloads, manual and offline Windows English captions, per-attendee Hindi and Spanish translation, and caption history export | Live Egress and storage deployment verification, multilingual speech recognition, additional translation pairs, and long-form recordings |
 | Pro meeting features | 30-hour room cap, 100-participant configuration, optional end-to-end encryption, and on-device recaps from opted-in caption collection and draft summaries from selected English notes | Capacity/load verification and automatic room-wide transcription |
 | Workplace suite | Desktop and web meeting workspaces with private Canvas and Tasks, local Clips, booking pages, calendar subscriptions, and Outlook Inbox, Sent, and plain-text compose | Broader mail support, collaborative Canvas and Tasks, and hosted clip sharing |
@@ -27,3 +27,5 @@ The 0.1.19 comparison adds recurring meeting edit scope and configuring breakout
 The 0.1.21 comparison adds moderator microphone announcements and attendee help requests. [Zoom breakout broadcasting](https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0062809) · [Zoom breakout participation](https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0060313)
 
 The 0.1.23 comparison adds assigning a host from the leave dialog and automatic host succession to a co-host in standard meetings. [Zoom host transfer flow](https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0067794) · [LiveKit connection states](https://docs.livekit.io/intro/basics/rooms-participants-tracks/webhooks-events/)
+
+The 0.1.24 comparison adds encrypted waiting-room re-entry and manual host transfer. [Zoom waiting room](https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0063329) · [LiveKit encryption](https://docs.livekit.io/transport/encryption/)
