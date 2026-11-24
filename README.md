@@ -19,7 +19,7 @@ npm ci
 npm run dist
 ```
 
-The installer is written to `release/Meetrix-InsForge-Setup-0.1.26-x64.exe`. To preconfigure the installer with a project, copy `.env.example` to `.env`, fill the InsForge settings, and run `npm run dist:local`. If your project requires an anon key, use its public anon key. Installer and executable signing are left to the distributor. Builds fetch the pinned caption models once and cache them in `vendor/caption-models`.
+The installer is written to `release/Meetrix-InsForge-Setup-0.1.27-x64.exe`. To preconfigure the installer with a project, copy `.env.example` to `.env`, fill the InsForge settings, and run `npm run dist:local`. If your project requires an anon key, use its public anon key. Installer and executable signing are left to the distributor. Builds fetch the pinned caption models once and cache them in `vendor/caption-models`.
 
 ## Host a workspace
 
@@ -30,6 +30,18 @@ The installer is written to `release/Meetrix-InsForge-Setup-0.1.26-x64.exe`. To 
 5. For container hosting, build with `docker build -t meetrix .`, supply the same server settings, and mount persistent storage at `/app/data`. The image listens on port 4317.
 
 Meetrix keys account ownership by the InsForge project and user ID. Earlier Clerk meeting records remain associated with their original identities. Moving those records requires explicit account linking.
+
+### Workspace meeting rules
+
+An operator can enable these settings independently in `.env`. Restart the hosted workspace to apply them. For a bundled Windows workspace, set them when building the installer. Rebuild and install the new package to change its bundled rules.
+
+| Setting | Effect when `true` |
+|---|---|
+| `MEETRIX_REQUIRE_MEETING_SIGN_IN` | Participants need a signed-in account to attend, including on existing invite links. Public booking pages remain available for reservations. |
+| `MEETRIX_REQUIRE_WAITING_ROOM` | New attendees wait for approval. Meetrix saves the waiting room as enabled on newly scheduled meetings. |
+| `MEETRIX_REQUIRE_MEETING_PASSCODE` | New instant, scheduled, and booked meetings require a passcode. The person reserving a public time chooses their own and enters it later. |
+
+The settings default to `false`. Enabling the waiting-room rule preserves prior admissions. Enabling the passcode rule leaves existing meeting passcodes as stored. The scheduler shows the active requirements. A previously authorized host or alternative host can start the room using their account.
 
 ### Hosted cloud recording
 

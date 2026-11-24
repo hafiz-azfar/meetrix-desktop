@@ -48,7 +48,7 @@ const occurrenceLabel = new Intl.DateTimeFormat(undefined, {
 const scheduleWeekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const inviteCode = new URLSearchParams(location.search).get('m');
 
-function MeetingForm({ mode, meeting, api, name, close, onCreated }) {
+function MeetingForm({ mode, meeting, api, name, close, onCreated, meetingPolicy = {} }) {
   const [working, setWorking] = useState(false);
   const [error, setError] = useState('');
   const [when, setWhen] = useState(() => meeting ? localDateValue(meeting.startAt) : '');
@@ -93,7 +93,8 @@ function MeetingForm({ mode, meeting, api, name, close, onCreated }) {
         return;
       }
       const created = await api('/meetings', { method: 'POST', body: {
-        ...details, name, additionalStarts: times.slice(1), lobby: form.get('lobby') === 'on', allowGuests: form.get('allowGuests') === 'on',
+        ...details, name, additionalStarts: times.slice(1), lobby: Boolean(meetingPolicy.requireWaitingRoom) || form.get('lobby') === 'on',
+        allowGuests: form.get('allowGuests') === 'on',
         encrypted: form.get('encrypted') === 'on',
         ...(form.get('passcode') ? { passcode: form.get('passcode') } : {}),
       } });
@@ -150,9 +151,13 @@ function MeetingForm({ mode, meeting, api, name, close, onCreated }) {
           <p className="muted">Months without a fifth matching weekday are skipped.</p>}
         {clockAdjusted && <p className="muted">A clock change moves one or more start times. Check the preview.</p>}
       </>}
-      {mode !== 'edit' && <><label><span>Passcode <span className="muted">(optional)</span></span><input name="passcode" type="password" autoComplete="new-password" minLength={8} maxLength={128} placeholder="At least 8 characters" /></label>
-      <label className="check"><input type="checkbox" name="lobby" defaultChecked /><span><strong>Waiting room</strong><small>Admit each guest before they join.</small></span></label>
-      <label className="check"><input type="checkbox" name="allowGuests" /><span><strong>Allow guests without an account</strong><small>The waiting room must be enabled.</small></span></label>
+      {mode !== 'edit' && <><label><span>Passcode <span className="muted">{meetingPolicy.requirePasscode ? '(required by workspace)' : '(optional)'}</span></span>
+        <input name="passcode" type="password" autoComplete="new-password" minLength={8} maxLength={128}
+          placeholder="At least 8 characters" required={meetingPolicy.requirePasscode} /></label>
+      <label className="check"><input type="checkbox" name="lobby" defaultChecked disabled={meetingPolicy.requireWaitingRoom} />
+        <span><strong>Waiting room</strong><small>{meetingPolicy.requireWaitingRoom ? 'Required by your workspace.' : 'Admit each guest before they join.'}</small></span></label>
+      <label className="check"><input type="checkbox" name="allowGuests" disabled={meetingPolicy.requireSignIn} />
+        <span><strong>Allow guests without an account</strong><small>{meetingPolicy.requireSignIn ? 'Your workspace requires sign-in.' : 'The waiting room must be enabled.'}</small></span></label>
       <label className="check"><input type="checkbox" name="encrypted" /><span><strong>End-to-end encrypted room</strong><small>Share a separate room key with guests. Server-stored collaboration is disabled.</small></span></label></>}
       {mode !== 'start' && <label>Alternative host emails (optional)
         <input type="email" name="alternativeHosts" multiple maxLength={1278} autoComplete="off"
@@ -412,7 +417,8 @@ export function Workspace({ config, user, accountControl, prefs, updatePrefs }) 
         </section>}
       </div>
     </main>
-    {['start', 'schedule'].includes(modal) && <MeetingForm mode={modal} api={api} name={name} close={() => setModal('')} onCreated={created} />}
+    {['start', 'schedule'].includes(modal) && <MeetingForm mode={modal} api={api} name={name} meetingPolicy={config.meetingPolicy}
+      close={() => setModal('')} onCreated={created} />}
     {editing && !['edit', 'series', 'breakout-plan'].includes(modal) && <Dialog title={editing.title} close={() => setEditing(null)}>
       {config.googleCalendar && <CalendarMeetingSync api={api} meeting={editing} onChanged={refresh} />}
       {config.outlook && <CalendarMeetingSync api={api} meeting={editing} provider="outlook" onChanged={refresh} />}

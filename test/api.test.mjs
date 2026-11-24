@@ -6,6 +6,8 @@ import { ParticipantInfo_State, TokenVerifier, TrackSource } from 'livekit-serve
 import { createApp } from '../server/app.mjs';
 import { insforgeSettings } from '../server/auth.mjs';
 import { readConfig } from '../server/config.mjs';
+import { openDatabase } from '../server/db.mjs';
+import { breakoutStore } from '../server/breakouts.mjs';
 import { breakoutHelpTopic, breakoutVoiceTopic, readVoicePacket, voiceBytes } from '../server/breakout-voice-format.mjs';
 
 const origin = 'https://meetrix.test';
@@ -13,7 +15,7 @@ const insforgeUrl = 'https://auth.meetrix.test';
 const livekitKey = 'test-api-key';
 const livekitSecret = 'not-a-real-secret-at-least-32-bytes';
 
-async function fixture(t, authFixture) {
+async function fixture(t, authFixture, { meetingPolicy, db } = {}) {
   const calls = [];
   const packets = [];
   const livePeople = new Map();
@@ -43,8 +45,8 @@ async function fixture(t, authFixture) {
   };
   const { app, checkHostContinuity, close } = createApp({
     origin, insforgeUrl, livekitKey, livekitSecret,
-    livekitUrl: 'wss://livekit.meetrix.test', databasePath: ':memory:',
-  }, { rooms, createAuth: authFixture, authenticate: async token => {
+    livekitUrl: 'wss://livekit.meetrix.test', databasePath: ':memory:', meetingPolicy,
+  }, { rooms, db, createAuth: authFixture, authenticate: async token => {
     if (!['owner', 'guest', 'stranger', 'attendee'].includes(token)) throw Error('Bad session');
     return token;
   } });
@@ -92,6 +94,48 @@ test('InsForge and LiveKit production configuration are pinned', () => {
   assert.throws(() => readConfig({ APP_ORIGIN: 'http://meetrix.test' }), /HTTPS/);
   assert.throws(() => readConfig({ NODE_ENV: 'production' }), /Production requires/);
   assert.throws(() => readConfig({ APP_ORIGIN: 'http://localhost:4317', HOST: '0.0.0.0' }), /loopback/);
+  assert.throws(() => readConfig({ INSFORGE_URL: insforgeUrl, MEETRIX_REQUIRE_WAITING_ROOM: 'yes' }), /true or false/);
+  assert.deepEqual(readConfig({ INSFORGE_URL: insforgeUrl, MEETRIX_REQUIRE_WAITING_ROOM: 'true' }).meetingPolicy,
+    { requireWaitingRoom: true, requirePasscode: false, requireSignIn: false });
+});
+
+test('workspace meeting rules enforce passcodes, admission, and signed-in routing on the server', async t => {
+  const meetingPolicy = { requireSignIn: true, requirePasscode: true, requireWaitingRoom: true };
+  const db = openDatabase(':memory:');
+  const legacyId = 'legacyPolicyRoom';
+  const publicId = 'legacyPublicRoom';
+  const oldGuest = 'guest_legacy';
+  const insert = db.prepare(`INSERT INTO meetings (id, owner, owner_name, title, start_at, created_at, lobby, allow_guests, opened_at)
+    VALUES (?, 'owner', 'Owner', 'Legacy room', ?, ?, ?, ?, ?)`);
+  const now = Date.now();
+  insert.run(legacyId, now, now, 0, 0, now);
+  insert.run(publicId, now, now, 1, 1, now);
+  db.prepare("INSERT INTO attendance(meeting, identity, name, decision, requested_at) VALUES (?, ?, 'Prior guest', 'pending', ?)")
+    .run(publicId, oldGuest, now);
+  const oldKey = breakoutStore(db).issueKey(publicId, oldGuest);
+  const { api, create, connect, moderate } = await fixture(t, undefined, { meetingPolicy, db });
+  assert.deepEqual((await api('/config', { token: '' })).json.meetingPolicy, meetingPolicy);
+  assert.equal((await create({})).status, 400);
+  assert.equal((await create({ allowGuests: true, passcode: 'policy fixture' })).status, 403);
+  const created = await create({ lobby: false, passcode: 'policy fixture' });
+  assert.equal(created.status, 201);
+  assert.equal(created.json.lobby, true);
+  assert.equal(created.json.hasPasscode, true);
+  assert.equal(JSON.stringify(created.json).includes('policy fixture'), false);
+  const { id } = created.json;
+  await connect(id, 'owner');
+  assert.equal((await connect(id, 'guest')).status, 403);
+  assert.equal((await connect(id, 'guest', { passcode: 'policy fixture' })).json.state, 'waiting');
+  await moderate(id, { action: 'decide', identity: 'guest', admit: true });
+  const joined = (await connect(id, 'guest')).json;
+  const place = (token, roomId, key) => api('/meetings/' + roomId + '/placement', { token, method: 'POST', body: { roomId, key } });
+  assert.equal((await place('', id, joined.routingKey)).status, 403);
+  assert.equal((await place('owner', id, joined.routingKey)).status, 403);
+  assert.equal((await place('guest', id, joined.routingKey)).status, 200);
+  assert.equal((await place('', publicId, oldKey)).status, 403);
+  assert.equal((await moderate(publicId, { action: 'decide', identity: oldGuest, admit: true })).status, 403);
+  assert.equal((await api('/meetings/' + publicId + '/guest', { token: '', method: 'POST', body: { name: 'Guest', proof: 'a'.repeat(32) } })).status, 403);
+  assert.equal((await connect(legacyId, 'stranger')).json.state, 'waiting');
 });
 
 test('passcode, waiting room, authorization, narrow grants, lock, remove and end', async t => {
@@ -505,6 +549,33 @@ test('a booking slot can be reserved once, hides guest details, and creates a wa
   assert.equal((await api(privatePath, { method: 'DELETE', body: {} })).status, 200);
   assert.equal((await api(publicPath, { token: '' })).status, 404);
   assert.equal((await api('/meetings')).json[0].id, booked.id);
+});
+
+test('public reservations create passcode-protected meetings under workspace policy without disclosing the passcode', async t => {
+  const { api, connect } = await fixture(t, undefined, { meetingPolicy: { requirePasscode: true, requireSignIn: true } });
+  const published = await api('/workspace/bookings', { method: 'POST', body: {
+    title: 'Policy booking', ownerName: 'Organizer', duration: 30, slots: [new Date(Date.now() + 3600_000).toISOString()],
+  } });
+  const path = '/bookings/' + published.json.id;
+  const publicPage = (await api(path, { token: '' })).json;
+  assert.equal(publicPage.requiresPasscode, true);
+  assert.equal(publicPage.requiresSignIn, true);
+  const reservation = { slot: publicPage.slots[0].id, name: 'Visitor' };
+  const reserve = body => api(path, { method: 'POST', token: '', body });
+  assert.equal((await reserve(reservation)).status, 400);
+  const passcode = 'reservation secret';
+  const booked = await reserve({ ...reservation, passcode });
+  assert.equal(booked.status, 201);
+  assert.equal(booked.json.hasPasscode, true);
+  assert.equal(JSON.stringify(booked.json).includes(passcode), false);
+  assert.equal(JSON.stringify((await api('/workspace/bookings')).json).includes(passcode), false);
+  const { id } = booked.json;
+  assert.equal((await api('/meetings/' + id + '/guest', { token: '', method: 'POST', body: {
+    name: 'Visitor', proof: 'a'.repeat(32), passcode,
+  } })).status, 403);
+  await connect(id, 'owner');
+  assert.equal((await connect(id, 'guest')).status, 403);
+  assert.equal((await connect(id, 'guest', { passcode })).json.state, 'waiting');
 });
 
 test('a calendar subscription is owner-scoped, updates, rotates and revokes', async t => {

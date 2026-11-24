@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { rateLimit } from 'express-rate-limit';
 import { z } from 'zod';
+import { encodePasscode } from './meeting-passcode.mjs';
 
 const idSchema = z.string().regex(/^[A-Za-z0-9_-]{16}$/);
 const publication = z.object({
@@ -9,10 +10,11 @@ const publication = z.object({
   duration: z.literal([15, 30, 45, 60]),
   slots: z.array(z.iso.datetime()).min(1).max(20),
 }).strict();
-const reservation = z.object({ slot: idSchema, name: z.string().trim().min(1).max(60) }).strict();
+const reservation = z.object({ slot: idSchema, name: z.string().trim().min(1).max(60),
+  passcode: z.string().min(8).max(128).optional() }).strict();
 const minute = 60_000;
 
-export function bookingRoutes(db, origin, limits) {
+export function bookingRoutes(db, origin, limits, meetingPolicy) {
   const ref = () => randomBytes(12).toString('base64url');
   const pages = db.prepare('SELECT * FROM booking_pages WHERE owner = ? AND active = 1 ORDER BY created_at DESC');
   const page = db.prepare('SELECT * FROM booking_pages WHERE id = ? AND active = 1');
@@ -22,7 +24,8 @@ export function bookingRoutes(db, origin, limits) {
   const findSlot = db.prepare('SELECT * FROM booking_slots WHERE page = ? AND id = ?');
   const disable = db.prepare('UPDATE booking_pages SET active = 0 WHERE owner = ? AND id = ? AND active = 1');
   const clear = db.prepare('DELETE FROM booking_slots WHERE page = ? AND meeting IS NULL');
-  const makeMeeting = db.prepare('INSERT INTO meetings(id, owner, owner_name, title, start_at, duration_minutes, created_at, lobby, allow_guests) VALUES(?, ?, ?, ?, ?, ?, ?, 1, 1)');
+  const makeMeeting = db.prepare(`INSERT INTO meetings(id, owner, owner_name, title, start_at, duration_minutes, created_at, lobby, allow_guests, passcode)
+    VALUES(?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`);
   const claimSlot = db.prepare('UPDATE booking_slots SET meeting = ?, guest_name = ? WHERE id = ? AND meeting IS NULL');
   const conflicts = db.prepare('SELECT 1 FROM meetings WHERE owner = ? AND stopped_at IS NULL AND start_at < ? AND start_at + duration_minutes * 60000 > ? LIMIT 1');
 
@@ -42,6 +45,7 @@ export function bookingRoutes(db, origin, limits) {
     const entries = slots.all(value.id);
     return {
       id: value.id, title: value.title, ownerName: value.owner_name, duration: value.duration,
+      requiresSignIn: meetingPolicy.requireSignIn, requiresPasscode: meetingPolicy.requirePasscode,
       slots: (owner ? entries : entries.filter(slot => !slot.meeting && slot.start_at > now + 5 * minute &&
         !conflicts.get(value.owner, slot.start_at + value.duration * minute, slot.start_at)))
         .map(slot => ({
@@ -57,10 +61,13 @@ export function bookingRoutes(db, origin, limits) {
         const result = idSchema.safeParse(req.params.id).success && page.get(req.params.id);
         return result ? res.json(snapshot(result)) : missing(res);
       });
-      api.post('/bookings/:id', rateLimit({ ...limits, limit: 10 }), (req, res) => {
+      api.post('/bookings/:id', rateLimit({ ...limits, limit: 10 }), async (req, res) => {
         if (req.get('origin') !== origin) return res.status(403).json({ error: 'This origin is not allowed.' });
         if (!idSchema.safeParse(req.params.id).success) return missing(res);
-        const { slot, name } = reservation.parse(req.body);
+        const { slot, name, passcode } = reservation.parse(req.body);
+        if (!page.get(req.params.id)) return missing(res);
+        if (meetingPolicy.requirePasscode && !passcode) return res.status(400).json({ error: 'Choose a meeting passcode.' });
+        const securedPasscode = passcode ? await encodePasscode(passcode) : null;
         const result = transaction(() => {
           const current = page.get(req.params.id);
           if (!current) return { missing: true };
@@ -69,9 +76,11 @@ export function bookingRoutes(db, origin, limits) {
           if (!chosen || chosen.meeting || chosen.start_at <= now + 5 * minute ||
               conflicts.get(current.owner, chosen.start_at + current.duration * minute, chosen.start_at)) return null;
           const id = ref();
-          makeMeeting.run(id, current.owner, current.owner_name, current.title, chosen.start_at, current.duration, now);
+          makeMeeting.run(id, current.owner, current.owner_name, current.title, chosen.start_at, current.duration, now,
+            Number(!meetingPolicy.requireSignIn), securedPasscode);
           claimSlot.run(id, name, chosen.id);
-          return { id, title: current.title, startAt: chosen.start_at, duration: current.duration };
+          return { id, title: current.title, startAt: chosen.start_at, duration: current.duration,
+            requiresSignIn: meetingPolicy.requireSignIn, hasPasscode: Boolean(securedPasscode) };
         });
         if (result?.missing) return missing(res);
         if (!result) return res.status(409).json({ error: 'That time is no longer available. Choose another time.' });

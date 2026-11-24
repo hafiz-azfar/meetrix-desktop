@@ -38,11 +38,11 @@ async function waitForLiveKit(child, url) {
   throw new Error('The local LiveKit server did not start.');
 }
 
-async function startLocal({ directory, runtime, origin = 'http://127.0.0.1:4317', dependencies, instance }) {
-  if (!instance) {
-    try { instance = JSON.parse(await readFile(join(runtime, 'local-instance.json'), 'utf8')); }
-    catch { return null; }
-  }
+async function startLocal({ directory, runtime, origin = 'http://127.0.0.1:4317', dependencies, instance, meetingPolicy }) {
+  let bundled;
+  try { bundled = JSON.parse(await readFile(join(runtime, 'local-instance.json'), 'utf8')); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  instance ??= bundled;
   if (!instance?.insforgeUrl) return null;
   await mkdir(directory, { recursive: true });
   const port = await freeTcpPort();
@@ -89,6 +89,7 @@ async function startLocal({ directory, runtime, origin = 'http://127.0.0.1:4317'
     const activeOrigin = address.origin;
     backend = createApp({
       origin: activeOrigin, insforgeUrl: instance.insforgeUrl, insforgeAnonKey: instance.insforgeAnonKey, desktop: true,
+      meetingPolicy: meetingPolicy ?? bundled?.meetingPolicy,
       livekitUrl: 'ws://127.0.0.1:' + port, livekitKey: key, livekitSecret: secret,
       databasePath: join(directory, 'meetrix.sqlite'), assets: join(__dirname, '..', 'dist'),
     }, dependencies);

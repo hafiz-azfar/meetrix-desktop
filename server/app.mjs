@@ -1,5 +1,4 @@
-import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
-import { promisify } from 'node:util';
+import { createHash, randomBytes } from 'node:crypto';
 import { resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import express from 'express';
@@ -22,10 +21,11 @@ import { breakoutHelpTopic } from './breakout-voice-format.mjs';
 import { breakoutEmail, breakoutEmailKey } from './breakout-identity.mjs';
 import { registerBreakoutPlans } from './breakout-plans.mjs';
 import { registerMeetingSeries } from './meeting-series.mjs';
+import { meetingPolicySchema } from './meeting-policy.mjs';
+import { checkPasscode, encodePasscode } from './meeting-passcode.mjs';
 import { cloudCommand, cloudRecordingId, createCloudRecording } from './cloud-recording.mjs';
 import { recordingStorage, streamRecording } from './cloud-recording-download.mjs';
 
-const scrypt = promisify(scryptCallback);
 const maxDuration = 30 * 60 * 60 * 1000;
 const hostReconnectGrace = 30_000;
 const hostCheckBatch = 12;
@@ -107,18 +107,6 @@ class RequestError extends Error {
   }
 }
 
-async function encodePasscode(value) {
-  const salt = randomBytes(16);
-  const key = await scrypt(value, salt, 32);
-  return salt.toString('hex') + ':' + key.toString('hex');
-}
-
-async function checkPasscode(value, stored) {
-  if (!value) return false;
-  const [salt, expected] = stored.split(':').map(part => Buffer.from(part, 'hex'));
-  return timingSafeEqual(expected, await scrypt(value, salt, expected.length));
-}
-
 function scheduledTime(input, now) {
   const time = input ? Date.parse(input) : now;
   if (!Number.isFinite(time) || time < now - 60000 || time > now + 366 * 86400000) {
@@ -148,6 +136,7 @@ function view(meeting, userId) {
 export function createApp(options, dependencies = {}) {
   const { origin, livekitUrl, livekitKey, livekitSecret, cloudRecording, googleCalendar, outlook,
     databasePath, assets, trustProxyHops = 0, dev = false, desktop = false } = options;
+  const meetingPolicy = meetingPolicySchema.parse(options.meetingPolicy ?? {});
   const db = dependencies.db ?? openDatabase(databasePath);
   const breakouts = breakoutStore(db);
   const settings = insforgeSettings(options.insforgeUrl, options.insforgeAnonKey);
@@ -162,7 +151,7 @@ export function createApp(options, dependencies = {}) {
     : null;
   const cloudStorage = egress ? dependencies.cloudStorage ?? recordingStorage(cloudRecording) : null;
   const publicConfig = { authProvider: 'insforge', desktop, desktopBrowserSignIn: true, mediaReady: Boolean(rooms),
-    cloudRecording: Boolean(egress), googleCalendar: Boolean(googleCalendar), outlook: Boolean(outlook) };
+    cloudRecording: Boolean(egress), googleCalendar: Boolean(googleCalendar), outlook: Boolean(outlook), meetingPolicy };
   const mediaOrigin = livekitUrl ? new URL(livekitUrl).origin : null;
   const localLoopback = new URL(origin).protocol === 'http:';
   const api = express.Router();
@@ -257,7 +246,7 @@ export function createApp(options, dependencies = {}) {
     next();
   });
   api.use(express.json({ limit: '56kb' }));
-  const bookings = bookingRoutes(db, origin, limitOptions);
+  const bookings = bookingRoutes(db, origin, limitOptions, meetingPolicy);
   bookings.public(api);
   const calendarFeed = calendarFeedRoutes(db, origin, limitOptions);
   calendarFeed.public(api);
@@ -282,7 +271,7 @@ export function createApp(options, dependencies = {}) {
     if (req.get('origin') !== origin) throw new RequestError(403, 'This origin is not allowed.');
     const { proof, ...input } = guestJoin.parse(req.body);
     const meeting = meetingFor(req);
-    if (!meeting.allow_guests || !meeting.lobby) throw new RequestError(403, 'Sign in to join this meeting.');
+    if (meetingPolicy.requireSignIn || !meeting.allow_guests || !meeting.lobby) throw new RequestError(403, 'Sign in to join this meeting.');
     const identity = 'guest_' + createHash('sha256').update(meeting.id + ':' + proof).digest('base64url');
     res.json(await connectMeeting(meeting, identity, input, true));
   });
@@ -295,11 +284,14 @@ export function createApp(options, dependencies = {}) {
       if (meetingEnded(current)) throw new RequestError(410, 'This meeting has ended.');
       const identity = breakouts.identity(current.id, input.key);
       if (!identity) throw new RequestError(403, 'Your meeting session is no longer active.');
+      if (meetingPolicy.requireSignIn && (identity.startsWith('guest_') || await placementIdentity(req) !== identity)) {
+        throw new RequestError(403, 'Use your signed-in account to continue in this meeting.');
+      }
       if (current.encrypted) {
         if (input.roomId !== current.id || input.breakoutRoomId !== undefined) {
           throw new RequestError(403, 'Encrypted meetings only use their main room.');
         }
-        if (!identity.startsWith('guest_') && await placementIdentity(req) !== identity) {
+        if (!meetingPolicy.requireSignIn && !identity.startsWith('guest_') && await placementIdentity(req) !== identity) {
           throw new RequestError(403, 'Use your signed-in session to continue in the encrypted meeting.');
         }
       }
@@ -350,6 +342,9 @@ export function createApp(options, dependencies = {}) {
     const requested = await serial(meeting.id, async () => {
       const current = findMeeting.get(meeting.id);
       const identity = breakouts.identity(current.id, key);
+      if (meetingPolicy.requireSignIn && (!identity || identity.startsWith('guest_') || await placementIdentity(req) !== identity)) {
+        throw new RequestError(403, 'Use your signed-in account to continue in this meeting.');
+      }
       const assigned = identity && breakouts.assigned(current.id, identity);
       if (current.encrypted || meetingEnded(current) || !assigned || findGuest.get(current.id, identity)?.decision !== 'admitted') {
         throw new RequestError(403, 'Help requests are available from active breakout rooms.');
@@ -733,8 +728,11 @@ export function createApp(options, dependencies = {}) {
 
   api.post('/meetings', byIdentity(20), async (req, res) => {
     const input = schedule.parse(req.body);
+    if (meetingPolicy.requirePasscode && !input.passcode) throw new RequestError(400, 'This workspace requires a meeting passcode.');
+    if (meetingPolicy.requireSignIn && input.allowGuests) throw new RequestError(403, 'This workspace requires participants to sign in.');
+    const lobby = meetingPolicy.requireWaitingRoom || input.lobby;
     if (input.alternativeHosts.length && !input.startAt) throw new RequestError(400, 'Schedule the meeting to add alternative hosts.');
-    if (input.allowGuests && !input.lobby) {
+    if (input.allowGuests && !lobby) {
       throw new RequestError(400, 'Enable the waiting room to allow guests without an account.');
     }
     const now = Date.now();
@@ -757,7 +755,7 @@ export function createApp(options, dependencies = {}) {
     db.exec('BEGIN IMMEDIATE');
     try {
       ids.forEach((id, index) => {
-        insert.run(id, req.identity, input.name, input.title, times[index], input.duration, now, Number(input.lobby), Number(input.allowGuests),
+        insert.run(id, req.identity, input.name, input.title, times[index], input.duration, now, Number(lobby), Number(input.allowGuests),
           passcodes[index], Number(input.encrypted), seriesId, seriesId ? index : null, alternateRoster);
         log.run(id, req.identity, 'create', null, now);
       });
@@ -821,7 +819,7 @@ export function createApp(options, dependencies = {}) {
         if (!guest && !verified) throw new RequestError(403, 'Enter the correct meeting passcode.');
         if (!guest) {
           db.prepare('INSERT INTO attendance(meeting, identity, name, decision, requested_at) VALUES(?, ?, ?, ?, ?)')
-            .run(current.id, identity, input.name, current.lobby ? 'pending' : 'admitted', Date.now());
+            .run(current.id, identity, input.name, current.lobby || meetingPolicy.requireWaitingRoom ? 'pending' : 'admitted', Date.now());
           guest = findGuest.get(current.id, identity);
         }
         if (!accountless && !current.encrypted && guest.breakout_email_key !== verifiedEmailKey &&
@@ -913,8 +911,10 @@ export function createApp(options, dependencies = {}) {
     const meeting = meetingFor(req);
     await requireModerator(meeting, req.identity);
     const guests = db.prepare(`SELECT identity, name, requested_at AS requestedAt, waiting_evicting AS evicting
-      FROM attendance WHERE meeting = ? AND decision = 'pending' ORDER BY requested_at LIMIT 100`)
-      .all(meeting.id).map(guest => ({ ...guest, evicting: Boolean(guest.evicting), accountless: guest.identity.startsWith('guest_') }));
+      FROM attendance WHERE meeting = ? AND decision = 'pending' AND (? = 0 OR identity NOT GLOB 'guest_*')
+      ORDER BY requested_at LIMIT 100`)
+      .all(meeting.id, Number(meetingPolicy.requireSignIn))
+      .map(guest => ({ ...guest, evicting: Boolean(guest.evicting), accountless: guest.identity.startsWith('guest_') }));
     res.json({ guests, locked: !!meeting.locked, ...meetingRoles(findMeeting.get(meeting.id)) });
   });
 
@@ -1124,6 +1124,9 @@ export function createApp(options, dependencies = {}) {
       }
       if (command.action === 'lock') db.prepare('UPDATE meetings SET locked = ? WHERE id = ?').run(Number(command.locked), current.id);
       if (command.action === 'decide') {
+        if (meetingPolicy.requireSignIn && command.admit && command.identity.startsWith('guest_')) {
+          throw new RequestError(403, 'This workspace requires participants to sign in.');
+        }
         const guest = findGuest.get(current.id, command.identity);
         if (guest?.decision !== 'pending') throw new RequestError(409, 'This request has already been handled.');
         if (guest.waiting_evicting) throw new RequestError(409, 'The participant is still being disconnected from the meeting.');

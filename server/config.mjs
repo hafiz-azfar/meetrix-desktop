@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { googleCalendarSettings } from './google-calendar-oauth.mjs';
 import { outlookSettings } from './outlook-oauth.mjs';
 import { insforgeSettings } from './auth.mjs';
+import { readMeetingPolicy } from './meeting-policy.mjs';
 
 export const root = fileURLToPath(new URL('../', import.meta.url));
 
@@ -57,6 +58,7 @@ export function readConfig(env = process.env, overrides = {}) {
   return {
     port, host, trustProxyHops, origin: originUrl.origin,
     ...insforgeSettings(env.INSFORGE_URL, env.INSFORGE_ANON_KEY),
+    meetingPolicy: readMeetingPolicy(env),
     cloudRecording: cloudRecordingSettings(env, originUrl, livekit),
     googleCalendar: googleCalendarSettings(env, originUrl),
     outlook: outlookSettings(env, originUrl),

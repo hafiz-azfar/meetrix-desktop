@@ -90,6 +90,8 @@
 | F47-N1 | Revoked and replaced media sessions lose delegated controls. An accountless guest cannot receive co-host access, and encrypted co-hosts cannot open breakout rooms | API and encrypted moderation smoke tests |
 | F48-H1 | A verified alternative host can start a scheduled room from its invite. The organizer can join it while locked and reclaim host control | `node test/smoke-alternative-host.mjs`. Set `MEETRIX_SMOKE_ENCRYPTED=1` to repeat with encrypted media |
 | F48-N1 | Accountless and unverified attendees cannot start meetings. Editing one occurrence preserves the other rosters, and encrypted starts require the room key | API tests |
+| F49-H1 | The scheduler shows the workspace rules and public bookings require a passcode when configured. Signed-in attendees still enter through the waiting room | `node test/smoke-meeting-policy.mjs` |
+| F49-N1 | Raw API requests cannot bypass required passcodes or accountless restrictions. A routing key alone cannot refresh admission in a signed-in workspace | API tests |
 | F12-P1 | 100-person load, 30-hour duration, and production availability | Deployment-scale verification |
 
 Run `npm test` for the API suite. The RTC tests use two isolated browser pages and a real loopback LiveKit server. The desktop test is aimed at the Windows development build.

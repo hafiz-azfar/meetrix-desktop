@@ -132,7 +132,8 @@ export function PublicBooking() {
     const form = new FormData(event.currentTarget);
     setPending(true);
     setError('');
-    try { setBooking(await api(endpoint, { method: 'POST', body: { slot, name: form.get('name') } })); }
+    try { setBooking(await api(endpoint, { method: 'POST', body: { slot, name: form.get('name'),
+      ...(page.requiresPasscode ? { passcode: form.get('passcode') } : {}) } })); }
     catch (failure) {
       setError(failure.message);
       setSlot('');
@@ -148,6 +149,8 @@ export function PublicBooking() {
         {booking ? <div className="sign-in-card form">
           <h1>You're booked</h1><p>{booking.title} · {localTime.format(booking.startAt)}</p>
           <p className="muted">Keep the link or save the calendar invitation. The host will admit you from the waiting room.</p>
+          {booking.requiresSignIn && <p className="muted">Sign in to Meetrix before joining.</p>}
+          {booking.hasPasscode && <p className="muted">Enter the passcode you chose when you join.</p>}
           <div className="meeting-tool-actions">
             <a className="button primary" href={invitation(booking.id)}>Open meeting link</a>
             <button className="button" onClick={() => calendarInvite(booking)}><CalendarDays size={17} /> Download calendar invite</button>
@@ -155,6 +158,7 @@ export function PublicBooking() {
         </div> : <div className="sign-in-card">
           <h1>{page?.title ?? 'Book a meeting'}</h1>
           {page && <p className="muted">With {page.ownerName} · {page.duration} minutes · {timezone}</p>}
+          {page?.requiresSignIn && <p className="muted">You’ll need to sign in to Meetrix to join.</p>}
           {!valid && <p className="error" role="alert">This booking page is unavailable.</p>}
           {error && <p className="error" role="alert">{error}</p>}
           {valid && !page && !error && <p role="status">Loading available times…</p>}
@@ -165,6 +169,8 @@ export function PublicBooking() {
               {page.slots.map(time => <option key={time.id} value={time.id}>{localTime.format(time.startAt)}</option>)}
             </select></label>
             <label>Your name<input name="name" maxLength={60} autoComplete="name" required /></label>
+            {page.requiresPasscode && <label>Meeting passcode<input name="passcode" type="password" minLength={8} maxLength={128}
+              autoComplete="new-password" required /><small>Use at least eight characters and keep it for the meeting.</small></label>}
             <button className="button primary" disabled={pending || !slot}>{pending ? 'Reserving…' : 'Reserve time'}</button>
           </form>}
         </div>}

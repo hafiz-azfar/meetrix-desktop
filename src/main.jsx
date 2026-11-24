@@ -42,7 +42,8 @@ function Login({ onSignedIn, onGuest }) {
         : methods ? isDesktop ? <DesktopBrowserSignIn onSignedIn={onSignedIn} providers={methods.providers} />
           : <SignInForm methods={methods} continueTo={continueTo} onSignedIn={onSignedIn} />
         : <p role="status">Loading sign-in methods…</p>}
-        {!approvalPage && <button className="button login-guest" onClick={onGuest}><DoorOpen size={17} /> Join as a guest</button>}
+        {!approvalPage && onGuest && <button className="button login-guest" onClick={onGuest}><DoorOpen size={17} /> Join as a guest</button>}
+        {joinCode && !onGuest && <p className="muted">This workspace requires participants to sign in.</p>}
       </div>
     </section>
   </main>;
@@ -75,7 +76,8 @@ function App() {
       {status.error && <button className="button" onClick={() => location.reload()}>Try again</button>}</div>;
   }
   if (!user && guest) return <GuestMeeting code={joinCode || ''} onBack={() => setGuest(false)} prefs={prefs} updatePrefs={updatePrefs} />;
-  if (!user) return <Login onSignedIn={isDesktop ? setUser : () => location.replace(continueTo)} onGuest={() => setGuest(true)} />;
+  if (!user) return <Login onSignedIn={isDesktop ? setUser : () => location.replace(continueTo)}
+    onGuest={status.config.meetingPolicy?.requireSignIn ? undefined : () => setGuest(true)} />;
   if (approvalPage) return <ApproveDesktop requestId={requestId} user={user} onSignedOut={setUser} />;
   return <Workspace config={status.config} user={user} accountControl={<DesktopSignOut onSignedOut={setUser} />}
     prefs={prefs} updatePrefs={updatePrefs} />;

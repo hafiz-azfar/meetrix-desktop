@@ -47,3 +47,4 @@ F45,Meetings,Automatic host succession,should,yes,partial,Standard and encrypted
 F46,Meetings,Encrypted host transfer and waiting-room readmission,should,yes,yes,Uses authenticated role and placement updates while the shared media key remains on the devices
 F47,Meetings,Encrypted co-host controls and microphone requests,should,yes,yes,Connected signed-in co-hosts can moderate. Participants can consent to a targeted microphone request
 F48,Meetings,Scheduled alternative hosts and organizer reclaim,should,yes,partial,Verified invitees can start unopened meetings and the connected organizer can reclaim the first host term. The organizer shares the invite
+F49,Meetings,Workspace-wide meeting policy,should,yes,partial,Operator settings can require sign-in and waiting rooms and passcodes. A role-based admin console remains open

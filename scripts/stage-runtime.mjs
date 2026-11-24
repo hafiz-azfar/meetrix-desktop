@@ -4,6 +4,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { insforgeSettings } from '../server/auth.mjs';
+import { readMeetingPolicy } from '../server/meeting-policy.mjs';
 import { stageSpeechRuntime } from './stage-speech.mjs';
 
 if (process.platform !== 'win32' || process.arch !== 'x64') throw new Error('The bundled LiveKit runtime targets Windows x64.');
@@ -25,4 +26,6 @@ execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Ex
 });
 await stageSpeechRuntime(runtime);
 const settings = process.argv.includes('--local-insforge') ? insforgeSettings(process.env.INSFORGE_URL, process.env.INSFORGE_ANON_KEY) : {};
+const meetingPolicy = readMeetingPolicy(process.env);
+if (Object.values(meetingPolicy).some(Boolean)) settings.meetingPolicy = meetingPolicy;
 await writeFile(resolve(runtime, 'local-instance.json'), JSON.stringify(settings));
