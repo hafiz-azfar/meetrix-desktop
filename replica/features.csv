@@ -13,12 +13,12 @@ F11,Security,End-to-end encrypted calls,should,yes,yes,Separate shared key for e
 F12,Meetings,30-hour meetings for 100 participants,should,yes,partial,Limits configured; high-scale verification pending
 F13,Collaboration,Meeting notes and export,should,yes,yes,Manual shared notes in standard rooms
 F14,Pro,Cloud recording and storage,should,yes,partial,Hosted LiveKit Egress integration with private S3 and authorized downloads. Production upload unverified
-F15,Pro,AI note-taking and summaries,should,yes,no,Requires consent and transcription plus model provider
-F16,Pro,Recurring scheduling and calendar sync,should,yes,partial,Daily weekday weekly and monthly recurrence with custom intervals and up to 52 dates with preview and ICS handoff
+F15,Pro,AI note-taking and summaries,should,yes,partial,On-device drafts from a selected English excerpt; automatic full-meeting summaries pending
+F16,Pro,Recurring scheduling and calendar sync,should,yes,partial,Daily weekday weekly and monthly recurrence with custom intervals and up to 52 dates with preview plus ICS downloads and an owner calendar feed
 F17,Pro,Whiteboard and breakout rooms,should,yes,partial,Whiteboard and manually assigned or self-selected rooms with text announcements and timed returns
 F18,Pro,Live captions and translation,should,yes,partial,Manual and automatic English captions with per-viewer size and contrast and on-device Hindi and Spanish translation and export
-F19,Workplace,Team chat mail and phone,could,yes,no,
-F20,Workplace,Canvas clips tasks and booking pages,could,yes,no,
+F19,Workplace,Team chat mail and phone,could,yes,partial,Member-scoped text channels with expiring invite codes; mail and phone pending
+F20,Workplace,Canvas clips tasks and booking pages,could,yes,partial,Personal Canvas and Tasks local WebM Clips and link-based bookings; hosted sharing and collaboration pending
 F21,Workplace,Admin console large scale support,could,yes,no,
 F22,Collaboration,In-room polls,should,yes,yes,One vote per account and host-controlled closing
 F23,Meetings,Select audio and video devices before or during a call,should,yes,yes,Speaker selection depends on browser support

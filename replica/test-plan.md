@@ -55,6 +55,12 @@
 | F18-H5 | A viewer’s caption size and contrast apply locally to the live overlay | Four-client LiveKit smoke test |
 | F32-H2 | A presenter draws shapes and text and exports a PNG. Attendees can see the marks and only the presenter gets the save control | Four-client LiveKit smoke test |
 | F33-H1 | An attendee exports active track metrics in JSON without participant identities or network data | Four-client LiveKit smoke test |
+| F15-H1 | A participant generates an editable summary from explicit source text while external requests are blocked | Workspace browser smoke test |
+| F16-H1 | A private calendar feed shows only its owner’s schedule and reflects edits. Rotation and revocation invalidate the old URL | API tests |
+| F19-H1 | Signed-in team members exchange messages. Removing a member clears access, and all issued invite codes are invalidated | API and workspace browser smoke tests |
+| F20-H1 | Tasks and Canvas persist with account isolation and optimistic concurrency checks | API and workspace browser smoke tests |
+| F20-H2 | A local clip is recorded, played after reload, exported as WebM and deleted, and the selected track is released when recording stops | Workspace browser smoke test with synthetic display source |
+| F20-H3 | Guests make a reservation and receive a meeting link. Competing requests cannot claim the same slot | API and workspace browser smoke tests |
 | F12-P1 | 100-person load, 30-hour duration, and production availability | Deployment-scale verification |
 
 Run `npm test` for the API suite. The RTC tests use two isolated browser pages and a real loopback LiveKit server. The desktop test is aimed at the Windows development build.

@@ -587,7 +587,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, connectionError, role
             {chat.map(message => <div className="chat-message" key={message.key}><strong>{message.from}</strong><p>{message.text}</p></div>)}<span ref={chartEnd} /></div>
           <form className="chat-form" onSubmit={send}><input aria-label="Message" placeholder="Message everyone" value={typed} maxLength={1000} onChange={event => setTyped(event.target.value)} /><button className="icon-button" disabled={pending || !online || !typed.trim()} aria-label="Send message"><Send size={19} /></button></form>
         </>}
-        {panel === 'notes' && <Notes api={api} id={id} />}
+        {panel === 'notes' && <Notes api={api} id={id} captionEntries={captions.entries} />}
         {panel === 'polls' && <Polls api={api} id={id} host={host} />}
         {panel === 'board' && <Whiteboard api={api} id={id} host={host} />}
         {panel === 'quality' && <CallStatistics room={room} online={online} />}

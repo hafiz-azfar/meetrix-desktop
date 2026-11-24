@@ -39,7 +39,7 @@ try {
     return route.abort();
   });
   closedNetwork = true;
-  for (const language of ['hi', 'es']) {
+  for (const language of ['hi', 'es', 'summary']) {
     const result = await page.evaluate(({ language, workerAsset }) => new Promise((resolve, reject) => {
       const worker = new Worker('/assets/' + workerAsset, { type: 'module' });
       const timeout = setTimeout(() => { worker.terminate(); reject(new Error('Translation worker timed out')); }, 60000);
@@ -50,13 +50,16 @@ try {
       };
       worker.onerror = finish(event => reject(new Error(event.message)));
       worker.onmessage = finish(event => resolve(event.data));
-      worker.postMessage({ id: 'test', text: 'The meeting starts tomorrow.', language });
+      const text = language === 'summary'
+        ? 'The project team approved the product launch. The release is scheduled for Friday. Maya will prepare the release notes before launch.'
+        : 'The meeting starts tomorrow.';
+      worker.postMessage({ id: 'test', text, language, action: language === 'summary' ? 'summarize' : undefined });
     }), { workerAsset, language });
     assert.equal(result.id, 'test');
-    assert.match(result.text ?? '', language === 'hi' ? /[\u0900-\u097f]/ : /reunión.*mañana/i);
+    assert.match(result.text ?? '', language === 'hi' ? /[\u0900-\u097f]/ : language === 'es' ? /reunión.*mañana/i : /launch|release/i);
   }
   assert.deepEqual(otherOrigins, []);
-  console.log('Both caption models translated English locally with external requests disabled.');
+  console.log('Caption translations and the meeting summary ran locally with external requests disabled.');
 } finally {
   await app?.close();
   await browser?.close();

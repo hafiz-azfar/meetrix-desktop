@@ -1,13 +1,18 @@
 import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import {
   ArrowDownToLine, ArrowRight, CalendarDays, ChevronRight,
-  Clipboard, Clock3, DoorOpen, Ellipsis, FileText, House, LockKeyhole, Mic, Plus, Settings,
+  CalendarClock, CheckSquare, Clipboard, Clock3, DoorOpen, Ellipsis, FileText, Film, House, LockKeyhole, MessageSquare, Mic, Plus, Settings,
   Video, X,
 } from 'lucide-react';
 import { apiFor, calendarInvite, calendarSeries, invitation, parseInvitation } from './api.js';
 import { maxOccurrences, maxRepeatInterval, meetingOccurrences } from './meeting-schedule.js';
 import { generateRoomKey, validRoomKey } from './encryption.js';
 import { Logo, Dialog } from './ui.jsx';
+import { TeamChat } from './team-chat.jsx';
+import { CalendarSubscription } from './calendar-subscription.jsx';
+import { Clips } from './clips.jsx';
+import { BookingWorkspace } from './booking-workspace.jsx';
+import { PersonalWorkspace } from './personal-workspace.jsx';
 import { Notes } from './notes.jsx';
 import { CameraPreview, DeviceFields } from './media-devices.jsx';
 import { CameraBackgroundFields } from './camera-background.jsx';
@@ -18,6 +23,11 @@ const Conference = lazy(() => import('./conference.jsx').then(module => ({ defau
 const panels = [
   { id: 'home', title: 'Home', icon: House },
   { id: 'meetings', title: 'Meetings', icon: CalendarDays },
+  { id: 'team-chat', title: 'Team chat', icon: MessageSquare },
+  { id: 'bookings', title: 'Bookings', icon: CalendarClock },
+  { id: 'tasks', title: 'Tasks', icon: CheckSquare },
+  { id: 'clips', title: 'Clips', icon: Film },
+  { id: 'canvases', title: 'Canvas', icon: FileText },
   { id: 'settings', title: 'Settings', icon: Settings },
 ];
 const meetingActions = [
@@ -236,7 +246,7 @@ export function Workspace({ config, user, accountControl, prefs, updatePrefs }) 
     setLoading(true);
     api('/meetings').then(setMeetings).catch(error => setNotice(error.message)).finally(() => setLoading(false));
   }
-  useEffect(refresh, [api]);
+  useEffect(() => { if (page === 'home' || page === 'meetings') refresh(); }, [api, page]);
   function enter(meeting) { setModal(''); setTarget(meeting); }
   function created(meeting, scheduled) {
     setModal('');
@@ -303,12 +313,18 @@ export function Workspace({ config, user, accountControl, prefs, updatePrefs }) 
           </section>
         </>}
         {page === 'meetings' && <div className="page-head"><h1>Meetings</h1><div className="meeting-actions">
+          <button className="button" onClick={() => setModal('calendar-subscription')}>Calendar subscription</button>
           {config.cloudRecording && <button className="button" onClick={() => setModal('cloud-recordings')}>
             <ArrowDownToLine size={16} /> Cloud recordings</button>}
           <button className="button" onClick={() => setModal('join')}><DoorOpen size={17} /> Join</button>
           <button className="button primary" onClick={() => setModal('schedule')}><Plus size={18} /> Schedule</button>
         </div></div>}
-        {page === 'settings' ? <><div className="page-head"><h1>Settings</h1></div><WorkspaceSettings prefs={prefs} updatePrefs={updatePrefs} /></> : <section className="meeting-list">
+        {page === 'team-chat' && <TeamChat api={api} name={name} />}
+        {page === 'clips' && <Clips key={user.id} owner={user.id} />}
+        {page === 'bookings' && <BookingWorkspace api={api} name={name} local={config.desktop} onChanged={refresh} />}
+        {['tasks', 'canvases'].includes(page) && <PersonalWorkspace key={page} api={api} kind={page} />}
+        {page === 'settings' && <><div className="page-head"><h1>Settings</h1></div><WorkspaceSettings prefs={prefs} updatePrefs={updatePrefs} /></>}
+        {['home', 'meetings'].includes(page) && <section className="meeting-list">
           <div className="section-header"><h2>{page === 'home' ? 'Upcoming meetings' : 'Your meetings'}</h2>{page === 'home'
             ? <button className="button subtle" onClick={() => setPage('meetings')}>View all <ChevronRight size={16} /></button>
             : <div className="segment" aria-label="Meeting history">{['upcoming', 'past'].map(tab => <button key={tab} className={filter === tab ? 'active' : ''} aria-pressed={filter === tab} onClick={() => setFilter(tab)}>{tab === 'upcoming' ? 'Upcoming' : 'Past'}</button>)}</div>}</div>
@@ -328,6 +344,7 @@ export function Workspace({ config, user, accountControl, prefs, updatePrefs }) 
     {editing && modal !== 'edit' && <Dialog title={editing.title} close={() => setEditing(null)}><div className="dialog-actions"><button className="button danger" onClick={() => cancel(editing)}>Cancel meeting</button><button className="button primary" onClick={() => setModal('edit')}>Reschedule</button></div></Dialog>}
     {editing && modal === 'edit' && <MeetingForm mode="edit" meeting={editing} api={api} name={name} close={() => { setModal(''); setEditing(null); }} onCreated={meeting => { setEditing(null); created(meeting, true); }} />}
     {archived && <Dialog title={archived.title + ' · Notes'} close={() => setArchived(null)}><Notes api={api} id={archived.id} readOnly /></Dialog>}
+    {modal === 'calendar-subscription' && <CalendarSubscription api={api} close={() => setModal('')} />}
     {modal === 'cloud-recordings' && <CloudRecordingLibrary api={api} close={() => setModal('')} />}
     {modal.startsWith('join') && <JoinForm code={modal === 'join' ? inviteCode || '' : modal.slice(5)} close={() => setModal('')} onJoin={enter} />}
     {target && <Preflight target={target} prefs={prefs} updatePrefs={updatePrefs} api={api} name={name} close={() => setTarget(null)} onConnected={setSession} />}

@@ -10,6 +10,10 @@ import { z } from 'zod';
 import { authenticationScope, createInsforgeAuth, insforgeSettings } from './auth.mjs';
 import { openDatabase } from './db.mjs';
 import { createDesktopAuth } from './desktop-auth.mjs';
+import { registerTeamChat } from './team-chat.mjs';
+import { calendarFeedRoutes } from './calendar-feed.mjs';
+import { bookingRoutes } from './bookings.mjs';
+import { registerPersonalWorkspace } from './personal-workspace.mjs';
 import { breakoutStore } from './breakouts.mjs';
 import { cloudCommand, cloudRecordingId, createCloudRecording } from './cloud-recording.mjs';
 import { recordingStorage, streamRecording } from './cloud-recording-download.mjs';
@@ -207,6 +211,10 @@ export function createApp(options, dependencies = {}) {
     next();
   });
   api.use(express.json({ limit: '56kb' }));
+  const bookings = bookingRoutes(db, origin, limitOptions);
+  bookings.public(api);
+  const calendarFeed = calendarFeedRoutes(db, origin, limitOptions);
+  calendarFeed.public(api);
   const desktopAuth = createDesktopAuth({ db, origin, scope, limitOptions });
   const auth = createInsforgeAuth({ db, origin, ...settings, sessions: desktopAuth, limitOptions, createAuth: dependencies.createAuth });
   const authenticate = dependencies.authenticate ?? auth.currentIdentity;
@@ -282,6 +290,10 @@ export function createApp(options, dependencies = {}) {
     next();
   });
   const byIdentity = (limit) => rateLimit({ ...limitOptions, limit, keyGenerator: req => req.identity });
+  registerPersonalWorkspace(api, db, byIdentity);
+  registerTeamChat(api, db, byIdentity);
+  bookings.owner(api, byIdentity);
+  calendarFeed.owner(api, byIdentity);
 
   function meetingFor(req) {
     if (!/^[A-Za-z0-9_-]{16}$/.test(req.params.id)) throw new RequestError(404, 'Meeting not found.');
@@ -925,7 +937,7 @@ export function createApp(options, dependencies = {}) {
     app.use(express.static(resolve(assets), { index: false, dotfiles: 'deny', setHeaders(res, path) {
       if (path.includes('assets')) res.set('Cache-Control', 'public, max-age=31536000, immutable');
     } }));
-    app.get(['/', '/join', '/sign-in', '/sign-up', '/desktop-sign-in'], (_req, res) => res.sendFile(resolve(assets, 'index.html'), { headers: { 'Cache-Control': 'no-store' } }));
+    app.get(['/', '/join', '/sign-in', '/sign-up', '/desktop-sign-in', '/book'], (_req, res) => res.sendFile(resolve(assets, 'index.html'), { headers: { 'Cache-Control': 'no-store' } }));
   }
   app.use((error, _req, res, _next) => {
     if (error instanceof z.ZodError) return res.status(400).json({ error: 'Check the submitted values and try again.' });

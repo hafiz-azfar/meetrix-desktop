@@ -81,8 +81,8 @@ function configureSession(browserSession, origin) {
       const result = await dialog.showMessageBox(target, {
         title: 'Share your screen', message: withSound ? 'Choose a display to share with sound' : 'Choose a display or window to share',
         detail: withSound
-          ? 'Everyone in the meeting can see this display and hear system audio, which can include sounds from other apps.'
-          : 'Everyone in the meeting can see the source you choose.',
+          ? 'This captures the selected display and system audio, which can include sounds from other apps.'
+          : 'Meetrix captures the selected display or window until you stop.',
         buttons: [...choices.map(choice => choice.name), 'Cancel'],
         defaultId: cancel, cancelId: cancel, noLink: true,
       });

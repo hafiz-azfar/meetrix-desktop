@@ -58,7 +58,7 @@ try {
   assert.ok(declined.tracks.error);
   assert.deepEqual(declined.prompt.types, ['screen']);
   assert.equal(declined.prompt.choice.defaultId, declined.prompt.choice.cancelId);
-  assert.match(declined.prompt.choice.detail, /hear system audio/);
+  assert.match(declined.prompt.choice.detail, /system audio/);
   const silent = await capture(false);
   assert.deepEqual(silent.prompt.types, ['screen', 'window']);
   assert.deepEqual(silent.tracks, { video: ['live'], audio: [] });

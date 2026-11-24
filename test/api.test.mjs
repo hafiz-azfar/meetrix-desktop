@@ -54,6 +54,10 @@ async function fixture(t) {
     });
     return { status: response.status, json: await response.json() };
   }
+  api.text = async path => {
+    const response = await fetch(root + path);
+    return { status: response.status, type: response.headers.get('content-type'), body: await response.text() };
+  };
   const create = input => api('/meetings', { method: 'POST', body: { title: 'Roadmap', name: 'Owner', ...input } });
   const connect = (id, token, input = {}) => api('/meetings/' + id + '/connect', { method: 'POST', token, body: { name: token, ...input } });
   const moderate = (id, body, token = 'owner') => api('/meetings/' + id + '/moderate', { method: 'POST', body, token });
@@ -128,6 +132,115 @@ test('weekly occurrences are created together and only the host can reschedule a
   assert.equal(longer.json.scheduledCount, 52);
   assert.equal(new Set(longer.json.scheduledMeetings.map(meeting => meeting.id)).size, 52);
   assert.equal((await api('/meetings')).json.length, 54);
+});
+
+test('personal workspace keeps items private and rejects stale saves and deletes', async t => {
+  const { api } = await fixture(t);
+  const tasks = '/workspace/tasks';
+  const payload = { title: 'Send a recap', body: 'Include next steps', dueDate: '2030-01-02', completed: false };
+  assert.equal((await api(tasks, { token: '' })).status, 401);
+  const created = await api(tasks, { method: 'POST', body: payload });
+  assert.equal(created.status, 201);
+  const path = tasks + '/' + created.json.id;
+  assert.equal((await api(path, { token: 'guest' })).status, 404);
+  assert.deepEqual((await api(tasks, { token: 'guest' })).json, []);
+  assert.equal((await api(path, { method: 'PUT', token: 'guest', body: { ...payload, version: 1 } })).status, 404);
+  const updated = await api(path, { method: 'PUT', body: { ...payload, completed: true, version: 1 } });
+  assert.equal(updated.json.completed, true);
+  assert.equal(updated.json.version, 2);
+  assert.equal((await api(path, { method: 'PUT', body: { ...payload, version: 1 } })).status, 409);
+  assert.equal((await api(path, { method: 'DELETE', body: { version: 1 } })).status, 409);
+  assert.equal((await api(path, { method: 'DELETE', body: { version: 2 } })).status, 200);
+  assert.equal((await api(path)).status, 404);
+  const canvas = await api('/workspace/canvases', { method: 'POST', body: { title: 'Design notes', body: '<script>plain text</script>' } });
+  assert.equal(canvas.status, 201);
+  assert.equal((await api('/workspace/canvases/' + canvas.json.id)).json.body, '<script>plain text</script>');
+  assert.equal((await api('/workspace/canvases/' + canvas.json.id, { token: 'guest' })).status, 404);
+});
+
+test('a booking slot can be reserved once, hides guest details, and creates a waiting room', async t => {
+  const { api } = await fixture(t);
+  const starts = [Date.now() + 45 * 60_000, Date.now() + 2 * 3_600_000].map(time => new Date(time).toISOString());
+  const input = { title: 'Consultation', ownerName: 'Organizer', duration: 30, slots: starts };
+  assert.equal((await api('/workspace/bookings', { method: 'POST', body: { ...input, slots: [starts[0], starts[0]] } })).status, 400);
+  const published = await api('/workspace/bookings', { method: 'POST', body: input });
+  assert.equal(published.status, 201);
+  const privatePath = '/workspace/bookings/' + published.json.id;
+  const publicPath = '/bookings/' + published.json.id;
+  const publicView = await api(publicPath, { token: '' });
+  assert.equal(publicView.status, 200);
+  assert.equal(publicView.json.slots.length, 2);
+  const [slot] = publicView.json.slots;
+  assert.deepEqual(Object.keys(slot).sort(), ['id', 'startAt']);
+  const reserve = (name, userOrigin) => api(publicPath, { token: '', method: 'POST', userOrigin, body: { slot: slot.id, name } });
+  assert.equal((await reserve('Other site', 'https://other.test')).status, 403);
+  const results = await Promise.all([reserve('First guest'), reserve('Second guest')]);
+  assert.deepEqual(results.map(result => result.status).sort(), [201, 409]);
+  const booked = results.find(result => result.status === 201).json;
+  assert.equal(booked.startAt, slot.startAt);
+  const [saved] = (await api('/meetings')).json;
+  assert.equal(saved.id, booked.id);
+  const joining = await api('/meetings/' + booked.id + '/guest', { token: '', method: 'POST',
+    body: { name: 'Booked visitor', proof: 'a'.repeat(32) } });
+  assert.equal(joining.status, 200);
+  assert.equal(joining.json.state, 'waiting');
+  assert.equal(saved.lobby, true);
+  assert.equal((await api(publicPath, { token: '' })).json.slots.length, 1);
+  assert.equal((await api(privatePath, { token: 'guest', method: 'DELETE', body: {} })).status, 404);
+  assert.equal((await api(privatePath, { method: 'DELETE', body: {} })).status, 200);
+  assert.equal((await api(publicPath, { token: '' })).status, 404);
+  assert.equal((await api('/meetings')).json[0].id, booked.id);
+});
+
+test('a calendar subscription is owner-scoped, updates, rotates and revokes', async t => {
+  const { api, create } = await fixture(t);
+  const { id } = (await create({ title: 'Calendar sync check', startAt: new Date(Date.now() + 3600000).toISOString() })).json;
+  await create({ title: 'Other owner event' });
+  const path = '/workspace/calendar-feed';
+  assert.deepEqual((await api(path)).json, { available: true, active: false });
+  assert.equal((await api(path, { method: 'POST', token: '', body: {} })).status, 401);
+  const created = (await api(path, { method: 'POST', body: {} })).json;
+  const feedPath = new URL(created.url).pathname.slice(4);
+  const raw = await api.text(feedPath);
+  assert.equal(raw.status, 200);
+  assert.match(raw.type, /^text\/calendar/);
+  assert.match(raw.body, /SUMMARY:Calendar sync check/);
+  const guest = (await api(path, { token: 'guest', method: 'POST', body: {} })).json;
+  assert.doesNotMatch((await api.text(new URL(guest.url).pathname.slice(4))).body, /Calendar sync check/);
+  await api('/meetings/' + id, { method: 'PATCH', body: {
+    title: 'Updated meeting', startAt: new Date(Date.now() + 7200000).toISOString(), duration: 45,
+  } });
+  assert.match((await api.text(feedPath)).body, /SUMMARY:Updated meeting/);
+  const rotated = (await api(path, { method: 'POST', body: {} })).json;
+  assert.equal((await api.text(feedPath)).status, 404);
+  const nextPath = new URL(rotated.url).pathname.slice(4);
+  assert.equal((await api.text(nextPath)).status, 200);
+  assert.equal((await api(path, { method: 'DELETE', body: {} })).status, 200);
+  assert.equal((await api.text(nextPath)).status, 404);
+});
+
+test('team channel content is membership-scoped and removing a member rotates access', async t => {
+  const { api } = await fixture(t);
+  const base = '/workspace/channels';
+  const room = (await api(base, { method: 'POST', body: { title: 'Team launch', name: 'Organizer' } })).json;
+  assert.ok(room.id, JSON.stringify(room));
+  const path = base + '/' + room.id;
+  const sent = await api(path + '/messages', { method: 'POST', body: { text: 'Ship after review.' } });
+  assert.equal(sent.status, 201);
+  assert.equal((await api(path + '/messages', { token: 'guest' })).status, 404);
+  assert.equal((await api(path + '/messages', { token: 'guest', method: 'POST', body: { text: 'Hello' } })).status, 404);
+  const key = (await api(path + '/invite', { method: 'POST', body: {} })).json.code;
+  const join = token => api(base + '/join', { method: 'POST', token, body: { name: 'Guest', code: key } });
+  assert.equal((await join('guest')).status, 200);
+  assert.equal((await api(path + '/invite', { token: 'guest', method: 'POST', body: {} })).status, 404);
+  assert.equal((await api(path + '/messages', { token: 'guest' })).json.messages[0].text, 'Ship after review.');
+  const listing = await api(path + '/messages');
+  assert.equal(listing.json.members.length, 1);
+  assert.equal((await api(path + '/members/' + listing.json.members[0].id, { method: 'DELETE', body: {} })).status, 200);
+  assert.equal((await api(path + '/messages', { token: 'guest' })).status, 404);
+  assert.equal((await join('stranger')).status, 404);
+  assert.equal((await api(path, { method: 'DELETE', body: {} })).status, 200);
+  assert.deepEqual((await api(base)).json, []);
 });
 
 test('accountless guests need host opt-in, the passcode, and admission for each meeting', async t => {

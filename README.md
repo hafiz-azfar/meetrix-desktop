@@ -19,7 +19,7 @@ npm ci
 npm run dist
 ```
 
-The installer is written to `release/Meetrix-InsForge-Setup-0.1.14-x64.exe`. To preconfigure the installer with a project, copy `.env.example` to `.env`, fill the InsForge settings, and run `npm run dist:local`. If your project requires an anon key, use its public anon key. Installer and executable signing are left to the distributor. Builds fetch the pinned caption models once and cache them in `vendor/caption-models`.
+The installer is written to `release/Meetrix-InsForge-Setup-0.1.15-x64.exe`. To preconfigure the installer with a project, copy `.env.example` to `.env`, fill the InsForge settings, and run `npm run dist:local`. If your project requires an anon key, use its public anon key. Installer and executable signing are left to the distributor. Builds fetch the pinned caption models once and cache them in `vendor/caption-models`.
 
 ## Host a workspace
 
@@ -61,6 +61,15 @@ In a standard, signed-in-only meeting, the host can request cloud recording unde
 - Shared notes, polls, and whiteboards. Encrypted rooms use a shared, client-generated key for LiveKit media and in-room data.
 
 [Feature comparison](replica/parity.md) · [Security model](SECURITY.md)
+
+## Workspace features
+
+- **Team chat** stores each channel’s recent conversation. A channel owner can create a time-limited invite code and remove members. Only signed-in members can read or send messages.
+- **Tasks** stores private to-dos with due dates and completion status. **Canvas** stores private documents with a Markdown preview and export.
+- **Clips** records a selected screen or window, with optional microphone audio. A clip lasts up to two minutes and can be played or downloaded as WebM from the local device library.
+- **Bookings** publishes available meeting slots. An invitee claims a slot and receives a meeting link and calendar invitation. The host admits them from the waiting room. Public links require a reachable hosted workspace.
+- **Calendar subscription** publishes upcoming meetings you organize through a private, revocable link in a hosted HTTPS workspace. Add the URL to a calendar app that supports internet subscriptions. The calendar app controls refresh timing. [Google Calendar](https://support.google.com/calendar/answer/37100) · [Outlook](https://support.microsoft.com/en-us/outlook/add-a-calendar-in-outlook-com-or-outlook-on-the-web) · [Apple Calendar](https://support.apple.com/guide/calendar/subscribe-to-calendars-icl1022/mac)
+- **AI meeting summary** in **Notes** drafts a summary of up to 2,400 characters of English notes or recent captions using a bundled on-device model. You can review, edit, and download the draft.
 
 ## Verification
 

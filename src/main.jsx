@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { DoorOpen } from 'lucide-react';
 import { ApproveDesktop, DesktopBrowserSignIn, DesktopSignOut, desktopRequest } from './desktop-auth.jsx';
 import { SignInForm } from './insforge-sign-in.jsx';
+import { PublicBooking } from './booking-workspace.jsx';
 import { GuestMeeting, Workspace } from './workspace.jsx';
 import { Logo } from './ui.jsx';
 import { useDevicePreferences } from './media-devices.jsx';
@@ -79,4 +80,4 @@ function App() {
     prefs={prefs} updatePrefs={updatePrefs} />;
 }
 
-createRoot(document.getElementById('root')).render(<App />);
+createRoot(document.getElementById('root')).render(location.pathname === '/book' ? <PublicBooking /> : <App />);

@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { download } from './api.js';
+import { MeetingSummary } from './meeting-summary.jsx';
 
-export function Notes({ api, id, readOnly = false }) {
+export function Notes({ api, id, readOnly = false, captionEntries = [] }) {
   const [draft, setDraft] = useState(null);
   const [baseline, setBaseline] = useState(null);
   const [message, setMessage] = useState('');
@@ -31,5 +32,6 @@ export function Notes({ api, id, readOnly = false }) {
       if (!dirty || window.confirm('Reload the saved notes and discard your unsaved changes?')) read();
     }}>Reload</button><button className="button" disabled={!draft} onClick={() => download('meetrix-notes.md', draft, 'text/markdown')}>Export</button></div>
     {message && <p className="muted" role="status">{message}</p>}
+    <MeetingSummary notes={draft ?? ''} captionEntries={captionEntries} />
   </div>;
 }

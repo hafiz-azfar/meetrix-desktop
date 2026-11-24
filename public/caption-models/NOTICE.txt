@@ -1,9 +1,14 @@
 Meetrix caption translation bundles the Apache-2.0 OPUS-MT English–Hindi and
 English–Spanish models by Helsinki-NLP, converted to ONNX by Xenova.
 
+Meetrix summary generation bundles the Apache-2.0 FLAN-T5 Small model
+by Google, converted to ONNX by Xenova.
+
 Original models
 https://huggingface.co/Helsinki-NLP/opus-mt-en-hi
 https://huggingface.co/Helsinki-NLP/opus-mt-en-es
+https://huggingface.co/google/flan-t5-small
+https://huggingface.co/Xenova/flan-t5-small
 
 ONNX model revisions and integrity checks are recorded in scripts/stage-translation.mjs.
 Transformers.js and Microsoft ONNX Runtime retain their upstream licenses.

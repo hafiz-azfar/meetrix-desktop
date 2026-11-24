@@ -30,7 +30,7 @@ const cameraAssets = {
 const models = resolve('vendor/caption-models');
 const ort = resolve('node_modules/onnxruntime-web/dist');
 const runtime = ['ort-wasm-simd-threaded.jsep.mjs', 'ort-wasm-simd-threaded.jsep.wasm'];
-const modelFile = /^\/opus-mt-en-(?:es|hi)\/(?:config\.json|generation_config\.json|tokenizer\.json|tokenizer_config\.json|onnx\/(?:encoder_model|decoder_model_merged)_quantized\.onnx)$/;
+const modelFile = /^\/(?:opus-mt-en-(?:es|hi)|flan-t5-small)\/(?:config\.json|generation_config\.json|tokenizer\.json|tokenizer_config\.json|onnx\/(?:encoder_model|decoder_model_merged)_quantized\.onnx)$/;
 
 const captionAssets = {
   name: 'meetrix-caption-models',

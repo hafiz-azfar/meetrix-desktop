@@ -8,6 +8,43 @@ export function openDatabase(filename) {
   db.exec(`
     PRAGMA journal_mode = WAL;
     PRAGMA foreign_keys = ON;
+    CREATE TABLE IF NOT EXISTS team_channels (
+      id TEXT PRIMARY KEY,
+      owner TEXT NOT NULL,
+      title TEXT NOT NULL,
+      invite_hash TEXT UNIQUE,
+      invite_until INTEGER
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS team_channels_owner ON team_channels(owner);
+    CREATE TABLE IF NOT EXISTS team_members (
+      channel TEXT NOT NULL REFERENCES team_channels(id) ON DELETE CASCADE,
+      identity TEXT NOT NULL,
+      id TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      PRIMARY KEY (channel, identity)
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS team_members_identity ON team_members(identity);
+    CREATE TABLE IF NOT EXISTS team_messages (
+      id INTEGER PRIMARY KEY,
+      channel TEXT NOT NULL REFERENCES team_channels(id) ON DELETE CASCADE,
+      sender TEXT NOT NULL,
+      name TEXT NOT NULL,
+      text TEXT NOT NULL,
+      sent_at INTEGER NOT NULL
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS team_messages_channel ON team_messages(channel, id DESC);
+    CREATE TABLE IF NOT EXISTS workspace_items (
+      id TEXT PRIMARY KEY,
+      owner TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK(kind IN ('tasks', 'canvases')),
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      due_date TEXT,
+      completed INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      version INTEGER NOT NULL DEFAULT 1
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS workspace_items_owner ON workspace_items(owner, kind, updated_at DESC);
     CREATE TABLE IF NOT EXISTS desktop_sign_ins (
       id TEXT PRIMARY KEY,
       challenge TEXT NOT NULL,
@@ -55,6 +92,28 @@ export function openDatabase(filename) {
       notes_version INTEGER NOT NULL DEFAULT 0
     ) STRICT;
     CREATE INDEX IF NOT EXISTS meetings_by_owner ON meetings(owner, start_at);
+    CREATE TABLE IF NOT EXISTS calendar_feeds (
+      owner TEXT PRIMARY KEY,
+      token_hash TEXT NOT NULL UNIQUE
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS booking_pages (
+      id TEXT PRIMARY KEY,
+      owner TEXT NOT NULL,
+      owner_name TEXT NOT NULL,
+      title TEXT NOT NULL,
+      duration INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      active INTEGER NOT NULL DEFAULT 1
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS booking_pages_owner ON booking_pages(owner, active, created_at DESC);
+    CREATE TABLE IF NOT EXISTS booking_slots (
+      id TEXT PRIMARY KEY,
+      page TEXT NOT NULL REFERENCES booking_pages(id),
+      start_at INTEGER NOT NULL,
+      meeting TEXT UNIQUE REFERENCES meetings(id),
+      guest_name TEXT,
+      UNIQUE (page, start_at)
+    ) STRICT;
     CREATE TABLE IF NOT EXISTS attendance (
       meeting TEXT NOT NULL REFERENCES meetings(id),
       identity TEXT NOT NULL,
