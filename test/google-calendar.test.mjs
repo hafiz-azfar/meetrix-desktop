@@ -6,7 +6,7 @@ import { openDatabase } from '../server/db.mjs';
 import { createApp } from '../server/app.mjs';
 import { calendarScope, googleCalendarSettings } from '../server/google-calendar-oauth.mjs';
 
-test('Google Calendar checks OAuth state, encrypts refresh credentials, and syncs linked event edits both ways', async t => {
+test('Google Calendar binds OAuth, synchronizes edits, and removes only eligible canceled occurrences', async t => {
   const origin = 'https://meetrix.test';
   const options = googleCalendarSettings({
     MEETRIX_GOOGLE_CALENDAR_CLIENT_ID: 'test.apps.googleusercontent.com',
@@ -18,6 +18,7 @@ test('Google Calendar checks OAuth state, encrypts refresh credentials, and sync
   let challenge;
   let number = 0;
   let exchanges = 0;
+  const deletions = [];
   const { app, close, syncCalendars } = createApp({
     origin, insforgeUrl: 'https://auth.meetrix.test', databasePath: ':memory:', googleCalendar: options,
   }, {
@@ -40,8 +41,15 @@ test('Google Calendar checks OAuth state, encrypts refresh credentials, and sync
       assert.equal(request.headers.Authorization, 'Bearer fixture-access');
       const id = url.pathname.split('/').at(-1);
       if (request.method === 'GET') return events.has(id) ? Response.json(events.get(id)) : new Response('', { status: 404 });
-      const value = JSON.parse(request.body);
       assert.equal(url.searchParams.get('sendUpdates'), 'none');
+      if (request.method === 'DELETE') {
+        assert.equal(request.headers['If-Match'], events.get(id).etag);
+        assert.equal(request.body, undefined);
+        deletions.push(id);
+        events.delete(id);
+        return new Response(null, { status: 204 });
+      }
+      const value = JSON.parse(request.body);
       assert.equal(value.attendees, undefined);
       if (request.method === 'PATCH') {
         assert.equal(request.headers['If-Match'], events.get(id).etag);
@@ -50,7 +58,7 @@ test('Google Calendar checks OAuth state, encrypts refresh credentials, and sync
         return Response.json(updated);
       }
       assert.equal(request.method, 'POST');
-      const created = { ...value, etag: '"' + ++number + '"' };
+      const created = { ...value, organizer: { self: true }, etag: '"' + ++number + '"' };
       events.set(created.id, created);
       return Response.json(created);
     },
@@ -93,7 +101,8 @@ test('Google Calendar checks OAuth state, encrypts refresh credentials, and sync
   assert.ok(sealed.length > 'fixture-refresh'.length);
   assert.doesNotMatch(sealed, /fixture-refresh/);
   const meeting = (await api('/meetings', 'POST', { title: 'Design review', name: 'Owner',
-    startAt: new Date(Date.now() + 3_600_000).toISOString(), duration: 30 })).data;
+    startAt: new Date(Date.now() + 3_600_000).toISOString(), duration: 30,
+    additionalStarts: [2, 3, 4].map(days => new Date(Date.now() + days * 86_400_000).toISOString()) })).data;
   const sync = '/meetings/' + meeting.id + '/google-calendar';
   assert.equal((await api(sync, 'POST', { direction: 'push' }, 'other')).status, 404);
   assert.equal((await api(sync, 'POST', { direction: 'push' })).status, 200);
@@ -106,7 +115,7 @@ test('Google Calendar checks OAuth state, encrypts refresh credentials, and sync
     end: { dateTime: ending.toISOString() } });
   assert.equal((await api(sync, 'POST', { direction: 'push' })).status, 409);
   assert.equal((await api(sync, 'POST', { direction: 'pull' })).status, 200);
-  const [updated] = (await api('/meetings')).data;
+  const updated = (await api('/meetings')).data.find(row => row.id === meeting.id);
   assert.equal(updated.title, 'Google review');
   assert.equal(updated.duration, 60);
   assert.equal(updated.startAt, moved.getTime());
@@ -118,7 +127,7 @@ test('Google Calendar checks OAuth state, encrypts refresh credentials, and sync
   latest.etag = '"automatic"';
   db.prepare('UPDATE calendar_automation SET next_at = 0 WHERE meeting = ?').run(meeting.id);
   await syncCalendars();
-  assert.equal((await api('/meetings')).data[0].title, 'Auto-imported Google title');
+  assert.equal((await api('/meetings')).data.find(row => row.id === meeting.id).title, 'Auto-imported Google title');
   assert.equal((await api(sync)).data.automatic.status, 'synced');
   latest.summary = 'Conflicting Google title';
   latest.etag = '"conflict"';
@@ -131,6 +140,33 @@ test('Google Calendar checks OAuth state, encrypts refresh credentials, and sync
   assert.equal((await api(sync, 'POST', { direction: 'keep-local' })).status, 200);
   assert.equal(events.get(event.id).summary, 'Keep Meetrix title');
   assert.equal((await api(sync)).data.automatic.status, 'synced');
+
+  const [, second, third, fourth] = meeting.scheduledMeetings;
+  for (const { id } of [second, third, fourth]) {
+    assert.equal((await api('/meetings/' + id + '/google-calendar', 'POST', { direction: 'push' })).status, 200);
+  }
+  const remoteId = id => db.prepare('SELECT event FROM google_calendar_events WHERE meeting = ?').get(id).event;
+  const secondEvent = remoteId(second.id);
+  const thirdEvent = remoteId(third.id);
+  events.get(thirdEvent).attendees = [{ email: 'guest@example.test' }];
+  events.delete(remoteId(fourth.id));
+  const series = '/meetings/' + second.id + '/series';
+  const { revision } = (await api(series)).data;
+  const cancel = { action: 'cancel', scope: 'following', revision, removeLinkedEvents: true };
+  assert.equal((await api(series, 'PATCH', cancel, 'other')).status, 404);
+  assert.equal((await api(series, 'PATCH', cancel)).data.calendarRemovals, 3);
+  assert.equal((await api(series, 'PATCH', cancel)).status, 409);
+  const state = async id => (await api('/meetings')).data.find(row => row.id === id).calendarRemovals;
+  assert.deepEqual(await state(second.id), [{ provider: 'google', status: 'pending' }]);
+  await syncCalendars();
+  await syncCalendars();
+  assert.deepEqual(deletions, [secondEvent]);
+  assert.deepEqual(await state(second.id), [{ provider: 'google', status: 'removed' }]);
+  assert.deepEqual(await state(third.id), [{ provider: 'google', status: 'attention' }]);
+  assert.deepEqual(await state(fourth.id), [{ provider: 'google', status: 'removed' }]);
+  assert.equal(events.has(event.id), true);
+  assert.equal(events.has(thirdEvent), true);
+
   assert.equal((await api(account, 'DELETE', {})).data.connected, false);
   assert.equal(db.prepare('SELECT count(*) AS n FROM calendar_automation').get().n, 0);
   assert.equal((await api(sync, 'POST', { direction: 'push' })).status, 409);

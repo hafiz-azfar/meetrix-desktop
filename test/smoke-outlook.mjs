@@ -3,17 +3,19 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { chromium } from 'playwright';
 import { startLocal } from '../desktop/local.cjs';
+import { openDatabase } from '../server/db.mjs';
 
 const output = resolve('test-results');
 await mkdir(output, { recursive: true });
 const directory = await mkdtemp(resolve(output, 'outlook-ui-'));
+const db = openDatabase(':memory:');
 let backend;
 let browser;
 try {
   backend = await startLocal({
     directory, runtime: resolve('vendor/runtime'), origin: 'http://127.0.0.1:0',
     instance: { insforgeUrl: 'https://auth.meetrix.test' },
-    dependencies: { createAuth: () => ({
+    dependencies: { db, createAuth: () => ({
       async getPublicAuthConfig() { return { data: { oAuthProviders: [] } }; },
       async signInWithPassword() {
         return { data: { accessToken: 'test-token', user: {
@@ -113,7 +115,43 @@ try {
   await page.waitForFunction(() => !document.querySelector('[aria-label="Outlook Calendar sync"] input[type="checkbox"]').checked);
   await toggle.click();
   await page.waitForFunction(() => document.querySelector('[aria-label="Outlook Calendar sync"] input[type="checkbox"]').checked);
-  console.log('Outlook UI passed for separate mail authorization, plain-text rendering, send confirmation, and calendar sync controls.');
+
+  const link = db.prepare('INSERT INTO outlook_events(meeting, event, etag) VALUES (?, ?, ?)');
+  link.run((await scheduled.json()).id, 'fixture-linked-event', 'W/"v1"');
+  page.once('dialog', dialog => dialog.dismiss());
+  await page.getByRole('button', { name: 'Cancel meeting', exact: true }).click();
+  assert.equal(db.prepare('SELECT count(*) AS total FROM calendar_removals').get().total, 0);
+  page.once('dialog', async dialog => {
+    assert.match(dialog.message(), /remove any linked Google or Outlook Calendar events/);
+    await dialog.accept();
+  });
+  await page.getByRole('button', { name: 'Cancel meeting', exact: true }).click();
+  await page.getByText('Meeting canceled. Linked calendar removal is pending in Past meetings.').waitFor();
+  await page.getByRole('button', { name: 'Past', exact: true }).click();
+  await page.getByText('Outlook Calendar · Removal pending').waitFor();
+
+  const series = await page.request.post(origin + '/api/meetings', {
+    headers: { Origin: origin }, data: { title: 'Series calendar review', name: 'Organizer', startAt: future, duration: 30,
+      additionalStarts: [new Date(Date.now() + 86_400_000).toISOString()] },
+  });
+  assert.equal(series.status(), 201);
+  const [first, next] = (await series.json()).scheduledMeetings;
+  link.run(first.id, 'fixture-first-occurrence', 'W/"v1"');
+  link.run(next.id, 'fixture-next-occurrence', 'W/"v1"');
+  await page.reload();
+  await page.getByRole('button', { name: 'Meetings', exact: true }).click();
+  await page.getByRole('button', { name: 'Upcoming', exact: true }).click();
+  await page.getByRole('button', { name: 'Manage scheduled meeting' }).first().click();
+  await page.getByRole('button', { name: 'Manage series' }).click();
+  await page.getByLabel('Apply to').selectOption('upcoming');
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByRole('button', { name: 'Cancel selected meetings' }).click();
+  await page.getByText('2 occurrences canceled. Linked calendar removal is pending in Past meetings.').waitFor();
+  await page.getByRole('button', { name: 'Past', exact: true }).click();
+  await page.getByText('Outlook Calendar · Removal pending').nth(2).waitFor();
+  assert.equal(await page.getByText('Outlook Calendar · Removal pending').count(), 3);
+  await page.screenshot({ path: resolve(output, 'meetrix-calendar-removals.png') });
+  console.log('Outlook UI passed for mail authorization, calendar sync, and single-meeting and series cancellation.');
 } finally {
   await browser?.close();
   backend?.stop();

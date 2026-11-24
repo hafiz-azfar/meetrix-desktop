@@ -53,13 +53,14 @@ function SeriesForm({ series, meeting, api, path, close, reload, onSaved }) {
   async function save(action) {
     if (busy || !selected.length) return;
     if (action === 'cancel' && !window.confirm('Cancel ' + selected.length +
-      (selected.length === 1 ? ' scheduled meeting? Its invite will stop working.' : ' scheduled meetings? Their invites will stop working.'))) return;
+      (selected.length === 1 ? ' scheduled meeting' : ' scheduled meetings') +
+      ' and remove any linked Google or Outlook Calendar events?')) return;
     setBusy(true);
     setFailure(null);
     try {
       const changes = action === 'reschedule' ? {
         title, duration: Number(duration), startTimes: dates.map(date => date.toISOString()),
-      } : {};
+      } : { removeLinkedEvents: true };
       const result = await api(path, { method: 'PATCH', body: { action, scope, revision: series.revision, ...changes } });
       onSaved(result, action);
     } catch (error) { setFailure(error); }

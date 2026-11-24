@@ -66,6 +66,8 @@
 | F23-H5 | Push-to-talk publishes a microphone only while held and releases on keyup and blur | Workspace browser smoke with fake media |
 | F30-H2 | Audio-only sharing transmits an audible track with no screen video, then releases the captured source | Four-client LiveKit and native Windows capture smoke tests |
 | F16-H3 | Organizer opts in to background synchronization. Only one-sided changes are applied and conflicts pause sync | Google and Outlook API fixtures and Outlook browser smoke test |
+| F16-H4 | Cancel one meeting or selected series occurrences. Verify linked calendar removal, already missing events, and organizer-only access. | Google and Outlook API fixtures and Outlook browser smoke test |
+| F16-E1 | Retry temporary provider failures. A linked event with attendees or a disconnected calendar needs organizer review. | Google and Outlook API fixtures |
 | F19-H2 | Outlook Mail consent is separate from Calendar. Inbox and Sent show plain text. Compose requires confirmation | Outlook API fixtures and browser smoke test |
 | F34-H1 | Enabling the Windows tray hides the minimized app and reminders omit meeting details | Unpacked Windows smoke test |
 | F19-H3 | Channel members post a threaded attachment and download it. Outsiders and removed members are denied. Removing the file preserves its message | API and workspace browser smoke tests |

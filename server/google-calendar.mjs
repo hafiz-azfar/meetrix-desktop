@@ -7,7 +7,7 @@ const route = '/meetings/:id/google-calendar';
 const directionSchema = z.object({ direction: z.enum(['push', 'pull', 'keep-local']) }).strict();
 const etag = value => typeof value === 'string' && value.length <= 256 && /^"[^"\r\n]+"$/.test(value);
 
-export function googleCalendarRoutes({ db, origin, settings, limits, error, serial, scheduledTime, request = fetch }) {
+export function googleCalendarRoutes({ db, origin, settings, limits, error, serial, scheduledTime, calendarRemovals, request = fetch }) {
   if (!settings) return null;
   const auto = calendarAutomation(db, 'google', error);
   let busy = false;
@@ -23,20 +23,44 @@ export function googleCalendarRoutes({ db, origin, settings, limits, error, seri
     try { return await request(url, { ...options, redirect: 'error', signal: AbortSignal.timeout(10000) }); }
     catch { throw error(502, 'Google Calendar could not be reached.'); }
   }
-  const oauth = createGoogleOAuth({ db, origin, settings, limits, error, serial, call, resetCalendar: auto.removeOwner });
+  const oauth = createGoogleOAuth({ db, origin, settings, limits, error, serial, call,
+    resetCalendar(owner) {
+      auto.removeOwner(owner);
+      calendarRemovals.detach('google', owner);
+    } });
 
-  async function event(token, method, id, body, match) {
+  async function event(token, method, id, body, match, removing = false) {
     const endpoint = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
-    const response = await call(endpoint + (id ? '/' + id : '') + (method === 'GET' ? '' : '?sendUpdates=none'), {
+    const response = await call(endpoint + (id ? '/' + encodeURIComponent(id) : '') + (method === 'GET' ? '' : '?sendUpdates=none'), {
       method,
       headers: { Authorization: 'Bearer ' + token, ...(body ? { 'Content-Type': 'application/json' } : {}),
         ...(match ? { 'If-Match': match } : {}) },
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
-    if (response.status === 404 && method === 'GET') return null;
+    if (response.status === 404 && (method === 'GET' || removing)) return null;
+    if (response.status === 410 && removing) return null;
     if ([409, 412].includes(response.status)) throw error(409, 'The Google event changed. Pull the changes before pushing again.');
     if (!response.ok) throw error(502, 'Google Calendar could not complete the event request.');
-    return response.json();
+    return method === 'DELETE' ? null : response.json();
+  }
+
+  function removeEvent(owner, id) {
+    return serial('calendar:' + owner, () => serial(id, async () => {
+      if (closed || !calendarRemovals.pending('google', id)) return;
+      const linked = link.get(id);
+      if (!linked) throw error(409, 'The Google Calendar connection changed.');
+      const token = await oauth.access(owner);
+      const remote = await event(token, 'GET', linked.event, undefined, undefined, true);
+      if (remote && remote.status !== 'cancelled') {
+        if (remote.id !== linked.event || remote.extendedProperties?.private?.meetrixEvent !== linked.event ||
+            !etag(remote.etag) || remote.organizer?.self !== true || remote.attendees?.length || remote.attendeesOmitted ||
+            remote.recurrence?.length || remote.recurringEventId || !remote.start?.dateTime || !remote.end?.dateTime) {
+          throw error(409, 'Review the changed event in Google Calendar.');
+        }
+        await event(token, 'DELETE', linked.event, undefined, remote.etag, true);
+      }
+      if (!closed) calendarRemovals.removed('google', id);
+    }));
   }
 
   function remoteFields(remote) {
@@ -120,6 +144,8 @@ export function googleCalendarRoutes({ db, origin, settings, limits, error, seri
       if (busy || closed) return;
       busy = true;
       try {
+        await calendarRemovals.drain('google', removeEvent, () => closed);
+        if (closed) return;
         for (const { id, owner } of auto.due()) {
           if (closed) return;
           try { await serial('calendar:' + owner, () => serial(id, () => sync(owner, id, 'auto'))); }

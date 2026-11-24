@@ -14,7 +14,7 @@ F12,Meetings,30-hour meetings for 100 participants,should,yes,partial,Limits con
 F13,Collaboration,Meeting notes and export,should,yes,yes,Manual shared notes in standard rooms
 F14,Pro,Cloud recording and storage,should,yes,partial,Hosted LiveKit Egress integration with private S3 and authorized downloads. Production upload unverified
 F15,Pro,AI note-taking and summaries,should,yes,partial,On-device excerpt summaries and automatic end-of-meeting recaps from locally collected shared captions
-F16,Pro,Recurring scheduling and calendar sync,should,yes,partial,Up to 52 dates with preview plus ICS downloads and an owner calendar feed plus manual and automatic Google or Outlook synchronization with conflict detection
+F16,Pro,Recurring scheduling and calendar sync,should,yes,partial,Up to 52 dates with preview plus ICS downloads and an owner calendar feed plus manual and automatic Google or Outlook synchronization with conflict detection and queued cancellation
 F17,Pro,Whiteboard and breakout rooms,should,yes,partial,Whiteboard and manually assigned or self-selected rooms with text announcements and timed returns
 F18,Pro,Live captions and translation,should,yes,partial,Manual and automatic English captions with per-viewer size and contrast and on-device Hindi and Spanish translation and export
 F19,Workplace,Team chat mail and phone,could,yes,partial,Member-scoped channels with threaded replies and 1 MiB file attachments plus Outlook plain-text mail; broader mail tools and phone pending
@@ -35,7 +35,7 @@ F33,Meetings,Connection statistics and diagnostics,should,yes,yes,Local WebRTC m
 F34,Desktop,Tray and scheduled reminders,should,yes,partial,Optional minimize to notification area with generic reminders while the app is running
 F35,Meetings,Custom recurring meeting patterns,should,yes,partial,Selected weekdays and monthly weekday patterns plus an end date within one year and up to 52 occurrences
 F36,Desktop,Accent themes,should,yes,yes,Four accessible color accents in light dark and system modes
-F37,Meetings,Edit and cancel recurring meeting occurrences,should,yes,partial,Apply changes to all upcoming occurrences or from the selected occurrence onward with stable invite links
+F37,Meetings,Edit and cancel recurring meeting occurrences,should,yes,partial,Apply changes to all upcoming occurrences or from the selected occurrence onward with stable invite links and background removal of eligible linked calendar events
 F38,Pro,Scheduled breakout room plans,should,yes,partial,Per-occurrence room names timing and verified-email assignments for admitted attendees including late arrivals
 F39,Desktop,Microphone recording and playback,should,yes,yes,Replay a short local microphone sample in Audio settings
 F40,Pro,Breakout microphone announcements,should,yes,yes,Live moderator audio to one occupied room or all occupied rooms for up to 30 seconds

@@ -15,7 +15,7 @@ const messageForm = z.object({
 }).strict();
 const address = recipient => ({ name: recipient?.emailAddress?.name || '', address: recipient?.emailAddress?.address || '' });
 
-export function outlookRoutes({ db, origin, settings, limits, error, serial, scheduledTime, request = fetch }) {
+export function outlookRoutes({ db, origin, settings, limits, error, serial, scheduledTime, calendarRemovals, request = fetch }) {
   if (!settings) return null;
   const auto = calendarAutomation(db, 'outlook', error);
   const find = db.prepare('SELECT * FROM meetings WHERE id = ? AND owner = ?');
@@ -33,7 +33,11 @@ export function outlookRoutes({ db, origin, settings, limits, error, serial, sch
     catch { throw error(502, 'Microsoft Outlook could not be reached.'); }
   }
   const oauth = createOutlookOAuth({ db, origin, settings, limits, error, serial, call,
-    resetCalendar(owner) { unlink.run(owner); auto.removeOwner(owner); } });
+    resetCalendar(owner) {
+      unlink.run(owner);
+      auto.removeOwner(owner);
+      calendarRemovals.detach('outlook', owner);
+    } });
 
   async function graph(path, token, { method = 'GET', body, etag, prefer, missing = false } = {}) {
     const response = await call(graphUrl + path, { method, headers: {
@@ -129,6 +133,24 @@ export function outlookRoutes({ db, origin, settings, limits, error, serial, sch
     return oauth.run(owner, 'calendar', token => serial(id, () => event(token, meetingFor(id, owner), direction)));
   }
 
+  function removeEvent(owner, id) {
+    return oauth.run(owner, 'calendar', token => serial(id, async () => {
+      if (closed || !calendarRemovals.pending('outlook', id)) return;
+      const linked = link.get(id);
+      if (!linked || !eventId.test(linked.event)) throw error(409, 'The Outlook Calendar connection changed.');
+      const path = 'events/' + encodeURIComponent(linked.event);
+      const remote = await graph(path, token, { prefer, missing: true });
+      if (remote && !remote.isCancelled) {
+        if (remote.id !== linked.event || !version(remote['@odata.etag']) || remote.isOrganizer !== true ||
+            remote.type !== 'singleInstance' || remote.isAllDay || remote.attendees?.length) {
+          throw error(409, 'Review the changed event in Outlook Calendar.');
+        }
+        await graph(path, token, { method: 'DELETE', etag: remote['@odata.etag'], prefer, missing: true });
+      }
+      if (!closed) calendarRemovals.removed('outlook', id);
+    }));
+  }
+
   return {
     public: oauth.public,
     close() { closed = true; },
@@ -136,6 +158,8 @@ export function outlookRoutes({ db, origin, settings, limits, error, serial, sch
       if (busy || closed) return;
       busy = true;
       try {
+        await calendarRemovals.drain('outlook', removeEvent, () => closed);
+        if (closed) return;
         for (const { id, owner } of auto.due()) {
           if (closed) return;
           try { await sync(owner, id, 'auto'); }

@@ -140,6 +140,15 @@ export function openDatabase(filename) {
       event TEXT NOT NULL,
       etag TEXT NOT NULL
     ) STRICT;
+    CREATE TABLE IF NOT EXISTS calendar_removals (
+      meeting TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL CHECK (provider IN ('google', 'outlook')),
+      status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'removed', 'attention')),
+      attempts INTEGER NOT NULL DEFAULT 0,
+      next_at INTEGER NOT NULL,
+      PRIMARY KEY (meeting, provider)
+    ) STRICT;
+    CREATE INDEX IF NOT EXISTS calendar_removals_due ON calendar_removals(provider, status, next_at);
     CREATE TABLE IF NOT EXISTS calendar_feeds (
       owner TEXT PRIMARY KEY,
       token_hash TEXT NOT NULL UNIQUE

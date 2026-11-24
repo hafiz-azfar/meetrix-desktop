@@ -334,10 +334,12 @@ export function Workspace({ config, user, accountControl, prefs, updatePrefs }) 
   }
   function leave() { setSession(null); setTarget(null); refresh(); }
   async function cancel(meeting) {
-    if (!window.confirm('Cancel this scheduled meeting? Its invite will stop working.')) return;
+    if (!window.confirm('Cancel this scheduled meeting and remove any linked Google or Outlook Calendar events?')) return;
     try {
-      await api('/meetings/' + meeting.id + '/moderate', { method: 'POST', body: { action: 'end' } });
-      setEditing(null); setNotice('Meeting canceled.'); refresh();
+      const result = await api('/meetings/' + meeting.id + '/cancel', { method: 'POST', body: { removeLinkedEvents: true } });
+      setEditing(null);
+      setNotice(result.calendarRemovals ? 'Meeting canceled. Linked calendar removal is pending in Past meetings.' : 'Meeting canceled.');
+      refresh();
     } catch (error) { setNotice(error.message); setEditing(null); }
   }
   async function copy(meeting) {
@@ -406,7 +408,11 @@ export function Workspace({ config, user, accountControl, prefs, updatePrefs }) 
             ? <button className="button subtle" onClick={() => setPage('meetings')}>View all <ChevronRight size={16} /></button>
             : <div className="segment" aria-label="Meeting history">{['upcoming', 'past'].map(tab => <button key={tab} className={filter === tab ? 'active' : ''} aria-pressed={filter === tab} onClick={() => setFilter(tab)}>{tab === 'upcoming' ? 'Upcoming' : 'Past'}</button>)}</div>}</div>
           {loading && !rows.length ? <p className="empty">Loading meetings…</p> : rows.length === 0 ? <div className="empty"><CalendarDays size={25} /><strong>{filter === 'past' && page === 'meetings' ? 'No past meetings' : 'Your schedule is clear'}</strong><span>{filter === 'past' && page === 'meetings' ? 'Ended meetings appear here.' : 'Scheduled meetings will appear here.'}</span></div> :
-            rows.map(meeting => <article className="meeting-row" key={meeting.id}><div className="meeting-symbol"><Video size={19} /></div><div className="meeting-info"><strong>{meeting.title}</strong><span><Clock3 size={13} />{timeLabel.format(meeting.startAt)} {meeting.openedAt && !meeting.stoppedAt && <em>Room open</em>}</span></div>
+            rows.map(meeting => <article className="meeting-row" key={meeting.id}><div className="meeting-symbol"><Video size={19} /></div><div className="meeting-info"><strong>{meeting.title}</strong><span><Clock3 size={13} />{timeLabel.format(meeting.startAt)} {meeting.openedAt && !meeting.stoppedAt && <em>Room open</em>}</span>
+              {meeting.calendarRemovals?.map(({ provider, status }) => <span key={provider}>
+                {provider === 'google' ? 'Google Calendar' : 'Outlook Calendar'} · {
+                  { pending: 'Removal pending', removed: 'Event removed', attention: 'Review event in calendar' }[status]}
+              </span>)}</div>
               {meeting.hasPasscode && <LockKeyhole className="muted" size={16} aria-label="Passcode required" />}
               {meeting.stoppedAt ? <>{!meeting.encrypted && <button className="icon-button" title="View meeting notes" aria-label="View meeting notes" onClick={() => setArchived(meeting)}><FileText size={17} /></button>}<span className="muted">{meeting.openedAt ? 'Ended' : 'Canceled'}</span></> : <>
                 <button className="icon-button" aria-label="Copy invite" title="Copy invite" onClick={() => copy(meeting)}><Clipboard size={17} /></button>
@@ -432,7 +438,8 @@ export function Workspace({ config, user, accountControl, prefs, updatePrefs }) 
     {editing && modal === 'series' && <SeriesManager meeting={editing} api={api} close={() => setModal('')} onSaved={(result, action) => {
       setModal(''); setEditing(null); refresh();
       setNotice(result.updated + (result.updated === 1 ? ' occurrence ' : ' occurrences ') +
-        (action === 'cancel' ? 'canceled.' : 'updated.'), result.meetings);
+        (action === 'cancel' ? 'canceled.' : 'updated.') +
+        (result.calendarRemovals ? ' Linked calendar removal is pending in Past meetings.' : ''), result.meetings);
     }} />}
     {editing && modal === 'breakout-plan' && <BreakoutPlan meeting={editing} api={api} close={() => setModal('')} onSaved={saved => {
       setModal(''); setEditing(null); setNotice(saved ? 'Breakout plan saved.' : 'Breakout plan removed.');

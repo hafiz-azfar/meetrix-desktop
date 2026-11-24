@@ -13,6 +13,7 @@ import { isTeamUpload, registerTeamChat } from './team-chat.mjs';
 import { googleCalendarRoutes } from './google-calendar.mjs';
 import { outlookRoutes } from './outlook.mjs';
 import { calendarFeedRoutes } from './calendar-feed.mjs';
+import { calendarRemovalQueue } from './calendar-removals.mjs';
 import { bookingRoutes } from './bookings.mjs';
 import { registerPersonalWorkspace } from './personal-workspace.mjs';
 import { breakoutStore } from './breakouts.mjs';
@@ -138,6 +139,15 @@ export function createApp(options, dependencies = {}) {
     databasePath, assets, trustProxyHops = 0, dev = false, desktop = false } = options;
   const meetingPolicy = meetingPolicySchema.parse(options.meetingPolicy ?? {});
   const db = dependencies.db ?? openDatabase(databasePath);
+  const calendarRemovals = calendarRemovalQueue(db);
+  const stopScheduled = db.prepare(`UPDATE meetings SET stopped_at = ?, cleaned_at = ?,
+    calendar_revision = calendar_revision + 1 WHERE id = ?`);
+  const stopCalendarSync = db.prepare('DELETE FROM calendar_automation WHERE meeting = ?');
+  function cancelScheduled(id, now, removeLinkedEvents) {
+    stopScheduled.run(now, now, id);
+    stopCalendarSync.run(id);
+    return removeLinkedEvents ? calendarRemovals.enqueue(id, now) : 0;
+  }
   const breakouts = breakoutStore(db);
   const settings = insforgeSettings(options.insforgeUrl, options.insforgeAnonKey);
   const scope = authenticationScope(settings.insforgeUrl);
@@ -250,10 +260,10 @@ export function createApp(options, dependencies = {}) {
   bookings.public(api);
   const calendarFeed = calendarFeedRoutes(db, origin, limitOptions);
   calendarFeed.public(api);
-  const google = googleCalendarRoutes({ db, origin, settings: googleCalendar, limits: limitOptions, serial, scheduledTime,
+  const google = googleCalendarRoutes({ db, origin, settings: googleCalendar, limits: limitOptions, serial, scheduledTime, calendarRemovals,
     request: dependencies.googleCalendarRequest, error: (status, message) => new RequestError(status, message) });
   google?.public(api);
-  const msOutlook = outlookRoutes({ db, origin, settings: outlook, limits: limitOptions, serial, scheduledTime,
+  const msOutlook = outlookRoutes({ db, origin, settings: outlook, limits: limitOptions, serial, scheduledTime, calendarRemovals,
     request: dependencies.outlookRequest, error: (status, message) => new RequestError(status, message) });
   msOutlook?.public(api);
   const desktopAuth = createDesktopAuth({ db, origin, scope, limitOptions });
@@ -723,7 +733,14 @@ export function createApp(options, dependencies = {}) {
       OR (id IN (SELECT meeting FROM attendance WHERE identity = ? AND decision = 'admitted'))
       ORDER BY start_at DESC LIMIT 200
     `).all(req.identity, req.identity);
-    res.json(rows.map(row => view(row, req.identity)));
+    res.json(rows.map(row => {
+      const meeting = view(row, req.identity);
+      if (row.owner === req.identity && row.stopped_at && !row.opened_at) {
+        const removals = calendarRemovals.status(row.id);
+        if (removals.length) meeting.calendarRemovals = removals;
+      }
+      return meeting;
+    }));
   });
 
   api.post('/meetings', byIdentity(20), async (req, res) => {
@@ -783,7 +800,26 @@ export function createApp(options, dependencies = {}) {
     });
     res.json(result);
   });
-  registerMeetingSeries(api, { db, byIdentity, meetingFor, view, serial, scheduledTime, reschedule, log,
+  api.post('/meetings/:id/cancel', byIdentity(30), async (req, res) => {
+    const { removeLinkedEvents } = z.object({ removeLinkedEvents: z.boolean().default(false) }).strict().parse(req.body);
+    const initial = meetingFor(req);
+    if (initial.owner !== req.identity) throw new RequestError(403, 'Only the meeting organizer can cancel it.');
+    const result = await serial(initial.id, () => {
+      const current = findMeeting.get(initial.id);
+      if (current.opened_at) throw new RequestError(409, 'This meeting has already opened.');
+      if (current.stopped_at) return { calendarRemovals: calendarRemovals.status(current.id).length };
+      const now = Date.now();
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        const count = cancelScheduled(current.id, now, removeLinkedEvents);
+        log.run(current.id, req.identity, 'cancel', null, now);
+        db.exec('COMMIT');
+        return { calendarRemovals: count };
+      } catch (failure) { db.exec('ROLLBACK'); throw failure; }
+    });
+    res.json(result);
+  });
+  registerMeetingSeries(api, { db, byIdentity, meetingFor, view, serial, scheduledTime, reschedule, log, cancelScheduled,
     error: (status, message) => new RequestError(status, message) });
   const breakoutPlan = registerBreakoutPlans(api, { db, byIdentity, meetingFor, serial,
     error: (status, message) => new RequestError(status, message) });

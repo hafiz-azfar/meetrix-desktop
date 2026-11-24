@@ -1,8 +1,8 @@
-# Meetrix 0.1.27 feature comparison
+# Meetrix 0.1.28 feature comparison
 
 | Area | Meetrix coverage | Remaining scope |
 |---|---|---|
-| Meetings | Instant meetings, weekly and monthly patterns, end-by-date, and series-wide edits and cancellations for up to 52 upcoming occurrences, calendar export, manual and automatic Google or Outlook calendar sync for selected meetings, host-approved guest access, camera preview, device selection, gallery/speaker mode, and screen/window sharing | Recurrence beyond one year, external event cancellation, extra display modes, and dial-in |
+| Meetings | Instant meetings, weekly and monthly patterns, end-by-date, and series-wide edits and cancellations for up to 52 upcoming occurrences, calendar export, manual and automatic Google or Outlook calendar sync and cancellation for linked events, host-approved guest access, camera preview, device selection, gallery/speaker mode, and screen/window sharing | Recurrence beyond one year, provider-originated cancellation, extra display modes, and dial-in |
 | Desktop preferences | Light, dark and system themes, four accent colors, chat text size and announcements, reduced motion, remappable in-app meeting shortcuts, caption size and contrast, minimize to tray, and scheduled meeting reminders | Broader desktop notifications |
 | Media preferences | Microphone meter and playback, test tone and volume, noise reduction, mirrored camera preview, local image backgrounds and blur, screen-share options, and Windows system audio with a display or as an audio-only share | Video backgrounds, green-screen controls, image filters, audio profiles, and native driver and hardware options |
 | In-call display and diagnostics | Fullscreen, elapsed-time display, participant filters, local camera pause, presentation layout, sampled WebRTC metrics with codec and jitter when available, local JSON export, and configurable push-to-talk | Dual-window layouts and broader network diagnostics |
@@ -35,3 +35,5 @@ The 0.1.25 comparison extends delegated moderation, automatic host succession, a
 The 0.1.26 comparison adds alternative hosts for scheduled meetings and allows the organizer to reclaim the host role during the initial alternative host term. [Zoom alternative hosts](https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0067027)
 
 The 0.1.27 comparison adds workspace rules enforced by the server. [Zoom account settings](https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0062734)
+
+The 0.1.28 comparison adds queued removal of linked Google and Outlook events when the organizer cancels an unopened meeting or selected series occurrences. [Google Calendar event deletion](https://developers.google.com/workspace/calendar/api/v3/reference/events/delete) · [Microsoft Graph event deletion](https://learn.microsoft.com/en-us/graph/api/event-delete?view=graph-rest-1.0)

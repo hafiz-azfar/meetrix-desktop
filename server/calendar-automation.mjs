@@ -7,7 +7,10 @@ const fingerprint = fields => createHash('sha256').update(JSON.stringify([fields
 
 export function calendarAutomation(db, provider, error) {
   const row = db.prepare('SELECT provider, baseline, status, updated_at AS updatedAt FROM calendar_automation WHERE meeting = ?');
-  const count = db.prepare('SELECT count(*) AS total FROM calendar_automation a JOIN meetings m ON m.id = a.meeting WHERE m.owner = ?');
+  const count = db.prepare(`
+    SELECT count(*) AS total FROM calendar_automation a JOIN meetings m ON m.id = a.meeting
+    WHERE m.owner = ? AND m.opened_at IS NULL AND m.stopped_at IS NULL AND m.start_at > ?
+  `);
   const insert = db.prepare('INSERT INTO calendar_automation(meeting, provider, baseline, next_at, updated_at, status) VALUES (?, ?, ?, ?, ?, ?)');
   const refresh = db.prepare('UPDATE calendar_automation SET baseline = ?, next_at = ?, updated_at = ?, status = ? WHERE meeting = ? AND provider = ?');
   const mark = db.prepare('UPDATE calendar_automation SET next_at = ?, updated_at = ?, status = ? WHERE meeting = ? AND provider = ?');
@@ -38,8 +41,8 @@ export function calendarAutomation(db, provider, error) {
       const existing = row.get(id);
       if (existing?.provider !== provider && existing) throw error(409, 'Another calendar already synchronizes this meeting.');
       if (!existing) {
-        if (count.get(owner).total >= 50) throw error(409, 'Automatic sync supports up to 50 meetings per organizer.');
         const now = Date.now();
+        if (count.get(owner, now).total >= 50) throw error(409, 'Automatic sync supports up to 50 upcoming meetings per organizer.');
         insert.run(id, provider, fingerprint(fields), now + interval, now, 'synced');
       } else settled(id, fields);
       return status(id);

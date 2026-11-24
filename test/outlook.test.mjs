@@ -6,7 +6,7 @@ import { createApp } from '../server/app.mjs';
 import { openDatabase } from '../server/db.mjs';
 import { outlookSettings } from '../server/outlook-oauth.mjs';
 
-test('Outlook uses separate grants and synchronizes calendar edits without overwriting conflicts', async t => {
+test('Outlook separates grants, reconciles edits, and retries cancellation without blocking the organizer', async t => {
   const origin = 'https://meetrix.test';
   const config = outlookSettings({
     MEETRIX_OUTLOOK_CLIENT_ID: 'ed224338-5204-47ea-9a8b-70450dc83f56',
@@ -19,6 +19,7 @@ test('Outlook uses separate grants and synchronizes calendar edits without overw
   let number = 0;
   const sent = [];
   let mailRefresh = 0;
+  let deleteAttempts = 0;
   const { app, close, syncCalendars } = createApp({
     origin, insforgeUrl: 'https://auth.meetrix.test', outlook: config, databasePath: ':memory:',
   }, {
@@ -50,6 +51,13 @@ test('Outlook uses separate grants and synchronizes calendar edits without overw
         assert.equal(options.headers.Authorization, 'Bearer access-calendar');
         assert.match(options.headers.Prefer, /timezone="UTC"/);
         if (options.method === 'GET') return event ? Response.json(event) : new Response(null, { status: 404 });
+        if (options.method === 'DELETE') {
+          assert.equal(options.headers['If-Match'], event['@odata.etag']);
+          assert.equal(options.body, undefined);
+          if (++deleteAttempts === 1) return new Response(null, { status: 503 });
+          event = null;
+          return new Response(null, { status: 204 });
+        }
         const fields = JSON.parse(options.body);
         assert.equal(fields.attendees, undefined);
         if (options.method === 'POST') {
@@ -59,7 +67,8 @@ test('Outlook uses separate grants and synchronizes calendar edits without overw
           assert.equal(options.method, 'PATCH');
           assert.equal(options.headers['If-Match'], event['@odata.etag']);
         }
-        event = { ...event, ...fields, type: 'singleInstance', id: 'outlook-event', '@odata.etag': 'W/"' + ++number + '"' };
+        event = { ...event, ...fields, type: 'singleInstance', isOrganizer: true,
+          id: 'outlook-event', '@odata.etag': 'W/"' + ++number + '"' };
         return Response.json(event);
       }
       assert.equal(options.headers.Authorization, 'Bearer access-mail');
@@ -157,6 +166,33 @@ test('Outlook uses separate grants and synchronizes calendar edits without overw
   assert.ok(mailRefresh >= 3);
   assert.equal((await api(base, 'DELETE', { capability: 'mail' })).json.calendar, true);
   assert.equal((await api(base + '/mail')).status, 409);
+
+  const cancelPath = '/meetings/' + meeting.id + '/cancel';
+  const removeLinkedEvents = { removeLinkedEvents: true };
+  assert.equal((await api(cancelPath, 'POST', removeLinkedEvents, 'intruder')).status, 403);
+  assert.equal((await api(cancelPath, 'POST', removeLinkedEvents)).json.calendarRemovals, 1);
+  assert.equal((await api(cancelPath, 'POST', removeLinkedEvents)).json.calendarRemovals, 1);
+  assert.equal((await api('/meetings')).json[0].stoppedAt > 0, true);
+  assert.equal((await api(path)).json.automatic.enabled, false);
+  const status = async () => (await api('/meetings')).json[0].calendarRemovals;
+  await syncCalendars();
+  assert.equal(deleteAttempts, 1);
+  assert.deepEqual(await status(), [{ provider: 'outlook', status: 'pending' }]);
+  await syncCalendars();
+  assert.equal(deleteAttempts, 1);
+  db.prepare('UPDATE calendar_removals SET next_at = 0 WHERE meeting = ?').run(meeting.id);
+  await syncCalendars();
+  assert.equal(deleteAttempts, 2);
+  assert.equal(event, null);
+  assert.deepEqual(await status(), [{ provider: 'outlook', status: 'removed' }]);
+
+  const detached = (await api('/meetings', 'POST', { title: 'Disconnected calendar', name: 'Owner', startAt: original, duration: 30 })).json;
+  assert.equal((await api('/meetings/' + detached.id + '/outlook', 'POST', { direction: 'push' })).status, 200);
+  assert.equal((await api('/meetings/' + detached.id + '/cancel', 'POST', removeLinkedEvents)).json.calendarRemovals, 1);
   assert.equal((await api(base, 'DELETE', { capability: 'calendar' })).json.calendar, false);
+  await syncCalendars();
+  assert.equal(deleteAttempts, 2);
+  assert.deepEqual((await api('/meetings')).json.find(row => row.id === detached.id).calendarRemovals,
+    [{ provider: 'outlook', status: 'attention' }]);
   assert.equal(db.prepare('SELECT count(*) AS n FROM calendar_automation').get().n, 0);
 });

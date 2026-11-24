@@ -4,15 +4,13 @@ import { z } from 'zod';
 const scope = z.enum(['following', 'upcoming']);
 const version = { scope, revision: z.string().regex(/^[a-f0-9]{64}$/) };
 
-export function registerMeetingSeries(api, { db, byIdentity, meetingFor, view, serial, scheduledTime, reschedule, log, error }) {
+export function registerMeetingSeries(api, { db, byIdentity, meetingFor, view, serial, scheduledTime, reschedule, log, cancelScheduled, error }) {
   const route = '/meetings/:id/series';
   const members = db.prepare('SELECT * FROM meetings WHERE series_id = ? AND owner = ? ORDER BY series_index');
   const update = db.prepare(`UPDATE meetings SET title = ?, duration_minutes = ?, start_at = ?,
     calendar_revision = calendar_revision + 1 WHERE id = ?`);
-  const cancel = db.prepare(`UPDATE meetings SET stopped_at = ?, cleaned_at = ?,
-    calendar_revision = calendar_revision + 1 WHERE id = ?`);
   const change = z.discriminatedUnion('action', [
-    z.object({ ...version, action: z.literal('cancel') }).strict(),
+    z.object({ ...version, action: z.literal('cancel'), removeLinkedEvents: z.boolean().default(false) }).strict(),
     z.object({ ...version, action: z.literal('reschedule'), title: reschedule.shape.title, duration: reschedule.shape.duration,
       startTimes: z.array(z.iso.datetime()).min(1).max(52) }).strict(),
   ]);
@@ -69,17 +67,19 @@ export function registerMeetingSeries(api, { db, byIdentity, meetingFor, view, s
           }
         }
 
+        let calendarRemovals = 0;
         db.exec('BEGIN IMMEDIATE');
         try {
           affected.forEach((row, index) => {
             if (editing) update.run(command.title, command.duration, times[index], row.id);
-            else cancel.run(now, now, row.id);
+            else calendarRemovals += cancelScheduled(row.id, now, command.removeLinkedEvents);
             log.run(row.id, req.identity, command.action + '-series', meeting.series_id, now);
           });
           db.exec('COMMIT');
         } catch (failure) { db.exec('ROLLBACK'); throw failure; }
         const after = snapshot(meeting, now);
-        return { updated: affected.length, meetings: after.upcoming.map(row => view(row, req.identity)) };
+        return { updated: affected.length, meetings: after.upcoming.map(row => view(row, req.identity)),
+          ...(calendarRemovals ? { calendarRemovals } : {}) };
       });
     });
     res.json(result);
