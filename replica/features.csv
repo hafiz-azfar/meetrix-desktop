@@ -38,3 +38,5 @@ F36,Desktop,Accent themes,should,yes,yes,Four accessible color accents in light 
 F37,Meetings,Edit and cancel recurring meeting occurrences,should,yes,partial,Apply changes to all upcoming occurrences or from the selected occurrence onward with stable invite links
 F38,Pro,Scheduled breakout room plans,should,yes,partial,Per-occurrence room names timing and verified-email assignments for admitted attendees including late arrivals
 F39,Desktop,Microphone recording and playback,should,yes,yes,Replay a short local microphone sample in Audio settings
+F40,Pro,Breakout microphone announcements,should,yes,yes,Live moderator audio to one occupied room or all occupied rooms for up to 30 seconds
+F41,Pro,Breakout requests for help,should,yes,partial,Participants request help and moderators can respond by announcement or mark the request resolved

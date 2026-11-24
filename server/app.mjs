@@ -17,6 +17,8 @@ import { calendarFeedRoutes } from './calendar-feed.mjs';
 import { bookingRoutes } from './bookings.mjs';
 import { registerPersonalWorkspace } from './personal-workspace.mjs';
 import { breakoutStore } from './breakouts.mjs';
+import { registerBreakoutVoice } from './breakout-voice.mjs';
+import { breakoutHelpTopic } from './breakout-voice-format.mjs';
 import { breakoutEmailKey } from './breakout-identity.mjs';
 import { registerBreakoutPlans } from './breakout-plans.mjs';
 import { registerMeetingSeries } from './meeting-series.mjs';
@@ -58,6 +60,7 @@ const breakoutCommand = z.discriminatedUnion('action', [
   }).strict()).min(1).max(8) }).strict(),
   z.object({ action: z.literal('close'), delaySeconds: z.number().int().min(1).max(120).optional() }).strict(),
   z.object({ action: z.literal('announce'), text: z.string().trim().min(1).max(300) }).strict(),
+  z.object({ action: z.literal('resolve-help'), roomId: z.string().regex(/^breakout_[A-Za-z0-9_-]{16}$/) }).strict(),
 ]);
 const placementTopic = 'meetrix.room-placement';
 const hostRolesTopic = 'meetrix.host-roles';
@@ -290,6 +293,24 @@ export function createApp(options, dependencies = {}) {
     });
     res.json(grant);
   });
+  api.post('/meetings/:id/breakout-help', rateLimit({ ...limitOptions, limit: 30 }), async (req, res) => {
+    if (req.get('origin') !== origin) throw new RequestError(403, 'This origin is not allowed.');
+    const { key } = z.object({ key: z.string().regex(/^[A-Za-z0-9_-]{43}$/) }).strict().parse(req.body);
+    const meeting = meetingFor(req);
+    const requested = await serial(meeting.id, async () => {
+      const current = findMeeting.get(meeting.id);
+      const identity = breakouts.identity(current.id, key);
+      const assigned = identity && breakouts.assigned(current.id, identity);
+      if (current.encrypted || meetingEnded(current) || !assigned || findGuest.get(current.id, identity)?.decision !== 'admitted') {
+        throw new RequestError(403, 'Help requests are available from active breakout rooms.');
+      }
+      if (!breakouts.askForHelp(assigned.id)) return false;
+      await media(client => client.sendData(current.id, Uint8Array.of(1), DataPacket_Kind.RELIABLE,
+        { topic: breakoutHelpTopic, destinationIdentities: [activeHost(current)] })).catch(() => {});
+      return true;
+    });
+    res.json({ requested });
+  });
   async function bearerAccount(req) {
     const token = /^Bearer ([A-Za-z0-9_.-]{1,4096})$/.exec(req.get('authorization') || '')?.[1];
     if (!token) throw new RequestError(401, 'Sign in to continue.');
@@ -313,6 +334,31 @@ export function createApp(options, dependencies = {}) {
     next();
   });
   const byIdentity = (limit) => rateLimit({ ...limitOptions, limit, keyGenerator: req => req.identity });
+  const breakoutVoice = registerBreakoutVoice(api, {
+    byIdentity, serial, meetingFor, getMeeting: id => findMeeting.get(id),
+    activeRooms: meeting => {
+      const closesAt = breakouts.closesAt(meeting.id);
+      return closesAt && closesAt <= Date.now() ? [] : breakouts.list(meeting.id).filter(room => room.members.length);
+    },
+    async requireSpeaker(meeting, identity) {
+      if (meeting.encrypted || meetingEnded(meeting) || !meeting.opened_at) {
+        throw new RequestError(403, 'Voice announcements require an open standard meeting.');
+      }
+      const delegated = identity === activeHost(meeting) ? null : findCoHost.get(meeting.id, identity);
+      if (identity !== activeHost(meeting) &&
+          (!delegated || findGuest.get(meeting.id, identity)?.decision !== 'admitted' || breakouts.assigned(meeting.id, identity))) {
+        throw new RequestError(403, 'Only a connected breakout moderator can send a voice announcement.');
+      }
+      const participant = await mainParticipant(meeting, identity);
+      if (!participant?.sid || delegated && delegated.sid !== participant.sid) {
+        throw new RequestError(403, 'Join the main meeting before sending a voice announcement.');
+      }
+      return participant;
+    },
+    send: (id, data, kind, options) => media(client => client.sendData(id, data, kind, options)),
+    log: (meeting, actor, target) => log.run(meeting, actor, 'announce-breakout-voice', target, Date.now()),
+    error: (status, message) => new RequestError(status, message),
+  });
   registerPersonalWorkspace(api, db, byIdentity);
   registerTeamChat(api, db, byIdentity);
   bookings.owner(api, byIdentity);
@@ -372,6 +418,7 @@ export function createApp(options, dependencies = {}) {
     }
   }
   async function disconnectRoom(meeting, actor) {
+    breakoutVoice.stop(meeting.id);
     await cloud?.stopMeeting(meeting, 'The meeting ended.');
     if (!meeting.stopped_at) {
       markEnded.run(Date.now(), meeting.id);
@@ -662,6 +709,7 @@ export function createApp(options, dependencies = {}) {
   });
 
   async function finishBreakouts(meeting, actor) {
+    breakoutVoice.stop(meeting);
     const existing = breakouts.list(meeting);
     const selfSelect = breakouts.choices(meeting).length > 0;
     if (breakouts.close(meeting)) log.run(meeting, actor, 'close-breakouts', null, Date.now());
@@ -674,7 +722,7 @@ export function createApp(options, dependencies = {}) {
 
   function breakoutView(meeting) {
     return { closesAt: breakouts.closesAt(meeting), selfSelect: breakouts.choices(meeting).length > 0, rooms: breakouts.list(meeting).map(({ id, name, members }) => ({
-      id, name, members: members.map(identity => findGuest.get(meeting, identity))
+      id, name, helpRequestedAt: breakouts.helpRequestedAt(id), members: members.map(identity => findGuest.get(meeting, identity))
         .filter(guest => guest?.decision === 'admitted').map(({ identity, name }) => ({ identity, name })),
     })) };
   }
@@ -716,6 +764,11 @@ export function createApp(options, dependencies = {}) {
       if (!current.opened_at || meetingEnded(current)) throw new RequestError(409, 'Start the meeting before managing breakout rooms.');
       if (current.encrypted) throw new RequestError(403, 'Breakout rooms are unavailable in encrypted meetings.');
       const existing = breakouts.list(current.id);
+      if (command.action === 'resolve-help') {
+        if (!existing.some(room => room.id === command.roomId)) throw new RequestError(404, 'This breakout room is unavailable.');
+        breakouts.resolveHelp(command.roomId);
+        return breakoutView(current.id);
+      }
       if (command.action === 'announce') {
         if (!existing.length) throw new RequestError(409, 'Open breakout rooms before sending an announcement.');
         const data = new TextEncoder().encode(command.text);
@@ -1019,6 +1072,7 @@ export function createApp(options, dependencies = {}) {
   const timer = setInterval(async () => {
     desktopAuth.sweep();
     auth.sweep();
+    breakoutVoice.sweep();
     for (const meeting of expired.all(Date.now() - maxDuration)) {
       try { await serial(meeting.id, () => {
         const current = findMeeting.get(meeting.id);
@@ -1072,6 +1126,7 @@ export function createApp(options, dependencies = {}) {
     clearInterval(calendarTimer);
     google?.close();
     msOutlook?.close();
+    breakoutVoice.close();
     cloudStorage?.close?.();
     db.close();
   } };

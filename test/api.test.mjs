@@ -6,6 +6,7 @@ import { ParticipantInfo_State, TokenVerifier, TrackSource } from 'livekit-serve
 import { createApp } from '../server/app.mjs';
 import { insforgeSettings } from '../server/auth.mjs';
 import { readConfig } from '../server/config.mjs';
+import { breakoutHelpTopic, breakoutVoiceTopic, readVoicePacket, voiceBytes } from '../server/breakout-voice-format.mjs';
 
 const origin = 'https://meetrix.test';
 const insforgeUrl = 'https://auth.meetrix.test';
@@ -14,6 +15,7 @@ const livekitSecret = 'not-a-real-secret-at-least-32-bytes';
 
 async function fixture(t, authFixture) {
   const calls = [];
+  const packets = [];
   const livePeople = new Map();
   const failedRemovals = new Set();
   const rooms = {
@@ -29,7 +31,10 @@ async function fixture(t, authFixture) {
     },
     async listParticipants() { return [...livePeople.values()]; },
     async mutePublishedTrack(id, identity, sid) { calls.push(['mute', id, identity, sid]); },
-    async sendData(room, _data, _kind, options) { calls.push(['data', room, options]); },
+    async sendData(room, data, _kind, options) {
+      calls.push(['data', room, options]);
+      if (options?.topic === breakoutVoiceTopic) packets.push({ room, data });
+    },
   };
   const { app, close } = createApp({
     origin, insforgeUrl, livekitKey, livekitSecret,
@@ -65,7 +70,7 @@ async function fixture(t, authFixture) {
   const create = input => api('/meetings', { method: 'POST', body: { title: 'Roadmap', name: 'Owner', ...input } });
   const connect = (id, token, input = {}) => api('/meetings/' + id + '/connect', { method: 'POST', token, body: { name: token, ...input } });
   const moderate = (id, body, token = 'owner') => api('/meetings/' + id + '/moderate', { method: 'POST', body, token });
-  return { api, create, connect, moderate, calls, livePeople, failedRemovals };
+  return { api, create, connect, moderate, calls, packets, livePeople, failedRemovals };
 }
 
 test('InsForge and LiveKit production configuration are pinned', () => {
@@ -263,6 +268,85 @@ test('scheduled breakout rosters match verified sign-ins only after normal admis
   assert.equal((await request(later)).json.roomId, meeting.id, 'a participant can keep their own room choice');
   await api(uri + '/breakouts', { method: 'POST', body: { action: 'close' } });
   assert.equal((await request(present)).json.roomId, meeting.id);
+});
+
+test('breakout voice is bound to the connected moderator and selected room', async t => {
+  const { api, create, connect, moderate, livePeople, packets } = await fixture(t);
+  const { id } = (await create({})).json;
+  const url = '/meetings/' + id;
+  const send = (body, token) => api(url + '/breakout-voice', { method: 'POST', token, body });
+  const main = identity => ({ identity, sid: 'PA_' + identity, state: ParticipantInfo_State.ACTIVE, tracks: [] });
+  await connect(id, 'owner');
+  for (const identity of ['guest', 'attendee', 'stranger']) {
+    await connect(id, identity);
+    await moderate(id, { action: 'decide', identity, admit: true });
+  }
+  const open = await api(url + '/breakouts', { method: 'POST', body: {
+    action: 'open', rooms: [{ name: 'Design', members: ['guest'] }, { name: 'Review', members: ['attendee'] }],
+  } });
+  assert.equal(open.status, 200);
+  const [design, review] = open.json.rooms;
+  assert.equal((await send({ action: 'start' })).status, 403);
+  livePeople.set('owner', main('owner'));
+  livePeople.set('stranger', main('stranger'));
+  assert.equal((await send({ action: 'start' }, 'guest')).status, 403);
+  const grant = await send({ action: 'start', roomId: design.id });
+  assert.equal(grant.status, 200);
+  const pcm = Buffer.alloc(voiceBytes, 0x4f).toString('base64');
+  const audio = { action: 'audio', broadcast: grant.json.broadcast, index: 0, pcm };
+  assert.equal((await send(audio, 'guest')).status, 409);
+  assert.equal((await send({ ...audio, pcm: 'x'.repeat(pcm.length) })).status, 400);
+  assert.equal((await send(audio)).status, 200);
+  assert.equal(packets.length, 1);
+  assert.equal(packets[0].room, design.id);
+  const packet = readVoicePacket(packets[0].data);
+  assert.equal(packet.id, grant.json.broadcast);
+  assert.equal(packet.index, 0);
+  assert.equal(packet.samples.getInt16(0, true), 0x4f4f);
+  assert.equal((await send(audio)).status, 409);
+  assert.equal((await send({ action: 'start', roomId: review.id })).status, 409);
+  await send({ action: 'stop', broadcast: grant.json.broadcast }, 'guest');
+  assert.equal((await send({ ...audio, index: 1 })).status, 200);
+  await send({ action: 'stop', broadcast: grant.json.broadcast });
+  assert.equal((await moderate(id, { action: 'co-host', identity: 'stranger', sid: 'PA_stranger', enabled: true })).status, 200);
+  const delegate = await send({ action: 'start' }, 'stranger');
+  assert.equal(delegate.status, 200);
+  assert.equal((await send({ ...audio, broadcast: delegate.json.broadcast }, 'stranger')).status, 200);
+  assert.deepEqual(packets.slice(-2).map(item => item.room).sort(), [design.id, review.id].sort());
+  await moderate(id, { action: 'co-host', identity: 'stranger', sid: 'PA_stranger', enabled: false });
+  assert.equal((await send({ ...audio, broadcast: delegate.json.broadcast, index: 1 }, 'stranger')).status, 403);
+  const active = await send({ action: 'start' });
+  assert.equal(active.status, 200);
+  await api(url + '/breakouts', { method: 'POST', body: { action: 'close' } });
+  assert.equal((await send({ ...audio, broadcast: active.json.broadcast })).status, 409);
+});
+
+test('breakout help requests are scoped to the assigned room and resolved by moderators', async t => {
+  const { api, create, connect, moderate, calls } = await fixture(t);
+  const { id } = (await create({})).json;
+  const url = '/meetings/' + id;
+  await connect(id, 'owner');
+  await connect(id, 'guest');
+  await moderate(id, { action: 'decide', identity: 'guest', admit: true });
+  const { routingKey } = (await connect(id, 'guest')).json;
+  const ask = (key, userOrigin = origin) => api(url + '/breakout-help', { method: 'POST', token: '', body: { key }, userOrigin });
+  assert.equal((await ask(routingKey)).status, 403);
+  const result = await api(url + '/breakouts', { method: 'POST', body: {
+    action: 'open', rooms: [{ name: 'Workshop', members: ['guest'] }],
+  } });
+  const [room] = result.json.rooms;
+  assert.equal((await ask(routingKey, 'https://other.test')).status, 403);
+  assert.equal((await ask('a'.repeat(43))).status, 403);
+  assert.deepEqual((await ask(routingKey)).json, { requested: true });
+  assert.deepEqual(calls.at(-1), ['data', id, { topic: breakoutHelpTopic, destinationIdentities: ['owner'] }]);
+  assert.deepEqual((await ask(routingKey)).json, { requested: false });
+  assert.ok((await api(url + '/breakouts')).json.rooms[0].helpRequestedAt);
+  const resolve = token => api(url + '/breakouts', { method: 'POST', token, body: { action: 'resolve-help', roomId: room.id } });
+  assert.equal((await resolve('guest')).status, 403);
+  assert.equal((await resolve('owner')).json.rooms[0].helpRequestedAt, null);
+  assert.deepEqual((await ask(routingKey)).json, { requested: true });
+  await api(url + '/breakouts', { method: 'POST', body: { action: 'close' } });
+  assert.equal((await ask(routingKey)).status, 403);
 });
 
 test('personal workspace keeps items private and rejects stale saves and deletes', async t => {

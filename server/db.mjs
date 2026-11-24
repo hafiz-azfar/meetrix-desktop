@@ -309,6 +309,10 @@ export function openDatabase(filename) {
       claimed INTEGER NOT NULL CHECK(claimed IN (0, 1)),
       PRIMARY KEY (meeting, email_key)
     ) STRICT;
+    CREATE TABLE IF NOT EXISTS breakout_help_requests (
+      room TEXT PRIMARY KEY REFERENCES breakout_rooms(id) ON DELETE CASCADE,
+      requested_at INTEGER NOT NULL
+    ) STRICT;
     CREATE INDEX IF NOT EXISTS team_message_threads ON team_messages(channel, reply_to, id DESC);
     CREATE INDEX IF NOT EXISTS team_message_replies ON team_messages(reply_to) WHERE reply_to IS NOT NULL;
     CREATE TABLE IF NOT EXISTS team_attachments (

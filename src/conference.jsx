@@ -23,6 +23,8 @@ import { CallStatistics } from './call-statistics.jsx';
 import { usePushToTalk } from './push-to-talk.js';
 import { shortcutFor } from './shortcuts.js';
 import { BreakoutCountdown, BreakoutRooms, ChooseBreakoutRoom } from './breakout-rooms.jsx';
+import { BreakoutVoicePlayback } from './breakout-voice.jsx';
+import { breakoutHelpTopic } from '../server/breakout-voice-format.mjs';
 import { CaptionsOverlay, CaptionsPanel, useManualCaptions } from './meeting-captions.jsx';
 import { RecordingBanner, RecordingPanel, useMeetingRecording } from './meeting-recording.jsx';
 import { hostRolesTopic, placementTopic, useRoomPlacement } from './room-placement.js';
@@ -146,6 +148,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, recap, connectionErro
   const [toast, setToast] = useState(session.roomNotice || '');
   const [confirmation, setConfirmation] = useState(false);
   const [microphoneRequest, setMicrophoneRequest] = useState(false);
+  const [requestingHelp, setRequestingHelp] = useState(false);
   const [settings, setSettings] = useState(false);
   const [shareOptions, setShareOptions] = useState(false);
   const [shareSound, setShareSound] = useState(false);
@@ -205,6 +208,18 @@ function Call({ session, api, prefs, updatePrefs, onLeave, recap, connectionErro
     setError('');
     try { await operation(); return true; }
     catch (failure) { setError(failure.message || 'That action could not be completed.'); return false; }
+  }
+  async function askForHelp() {
+    if (!online || requestingHelp) return;
+    setRequestingHelp(true);
+    try {
+      await run(async () => {
+        const { requested } = await api('/meetings/' + id + '/breakout-help', {
+          method: 'POST', body: { key: session.routingKey },
+        });
+        setToast(requested ? 'Your room asked the host for help.' : 'Your room already has a pending help request.');
+      });
+    } finally { setRequestingHelp(false); }
   }
 
   useEffect(() => {
@@ -291,6 +306,10 @@ function Call({ session, api, prefs, updatePrefs, onLeave, recap, connectionErro
         if (text && text.length <= 300) setToast('Host announcement · ' + text);
         return;
       }
+      if (serverPacket && topic === breakoutHelpTopic && canModerate && meetingTools && payload.byteLength === 1 && payload[0] === 1) {
+        setToast('A breakout room asked for help. Open Breakouts to see the request.');
+        return;
+      }
       if (!participant || topic !== messageTopic || payload.byteLength > 6000) return;
       try {
         const event = JSON.parse(decoder.decode(payload));
@@ -318,7 +337,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, recap, connectionErro
       room.off(RoomEvent.ParticipantDisconnected, remove);
       room.off(RoomEvent.Disconnected, refreshPlacement);
     };
-  }, [room, refreshPlacement, session.breakoutName, meetingTools, updateRoles]);
+  }, [room, refreshPlacement, session.breakoutName, meetingTools, canModerate, updateRoles]);
   useEffect(() => { chartEnd.current?.scrollIntoView({ block: 'nearest' }); }, [chat, panel]);
   useEffect(() => {
     if (!reaction) return;
@@ -576,6 +595,8 @@ function Call({ session, api, prefs, updatePrefs, onLeave, recap, connectionErro
       {online && host && hostVersion > 0 && <span className="breakout-indicator" role="status">You’re the host</span>}</div>
       <div className="call-header-actions">
         {session.meeting.encrypted && <span className="button subtle"><ShieldCheck size={16} /> Encrypted media</span>}
+        {session.breakoutName && session.routingKey && <button className="button" disabled={!online || requestingHelp}
+          onClick={askForHelp}>Ask for help</button>}
         <button className="button" disabled={!online} onClick={() => setSettings(true)}><Settings2 size={16} /> Devices</button>
         <button className="button" onClick={() => run(async () => { await navigator.clipboard.writeText(invitation(id)); setToast('Invite copied.'); })}><Clipboard size={16} /> Invite</button>
         <button className="button" onClick={toggleLayout}><Grid2X2 size={16} /> {layout === 'grid' ? 'Speaker' : 'Gallery'}</button>
@@ -590,6 +611,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, recap, connectionErro
       {(error || toast) && <button className="icon-button" aria-label="Dismiss notice" onClick={() => { setError(''); setToast(''); }}><X size={17} /></button>}
     </div>}
     {pushToTalk.status && <div className="call-notice" role="status">{pushToTalk.status}</div>}
+    {session.breakoutName && online && <BreakoutVoicePlayback room={room} speakerId={prefs.speakerId} volume={prefs.speakerVolume} />}
     {online && microphoneRequest && !isMicrophoneEnabled && <div className="call-notice" role="status">
       <span>A moderator asked you to turn on your microphone.</span>
       <div className="meeting-tool-actions"><button className="button primary small" onClick={toggleMicrophone}>Turn on microphone</button>
@@ -673,7 +695,8 @@ function Call({ session, api, prefs, updatePrefs, onLeave, recap, connectionErro
           <RecordingPanel recording={recording} participants={participants} online={online} />
           {cloudRecordingEnabled && <CloudRecordingPanel recording={cloudRecording} online={online} />}
         </>}
-        {panel === 'breakouts' && canManageBreakouts && <BreakoutRooms api={api} meetingId={id} participants={participants.filter(participant => !roleOf(participant))}
+        {panel === 'breakouts' && canManageBreakouts && <BreakoutRooms api={api} meetingId={id} online={online} prefs={prefs}
+          participants={participants.filter(participant => !roleOf(participant))}
           moveToWaitingRoom={moveToWaitingRoom}
           removeParticipant={identity => moderate({ action: 'remove', identity })} />}
         {panel === 'breakouts' && !canManageBreakouts && breakoutChoices.length > 0 && <ChooseBreakoutRoom

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Hourglass, Plus, Send, Shuffle, UserMinus, X } from 'lucide-react';
+import { BreakoutVoiceSender } from './breakout-voice.jsx';
 
 export function BreakoutCountdown({ closesAt, label = 'Returning in' }) {
   if (!closesAt) return null;
@@ -17,7 +18,7 @@ function BreakoutClock({ closesAt, label }) {
   return <span className="breakout-indicator" role="timer">{label} {minutes}:{String(remaining % 60).padStart(2, '0')}</span>;
 }
 
-export function BreakoutRooms({ api, meetingId, participants, moveToWaitingRoom, removeParticipant }) {
+export function BreakoutRooms({ api, meetingId, participants, moveToWaitingRoom, removeParticipant, online, prefs }) {
   const [active, setActive] = useState(null);
   const [openSelection, setOpenSelection] = useState(false);
   const [selfSelect, setSelfSelect] = useState(false);
@@ -109,6 +110,11 @@ export function BreakoutRooms({ api, meetingId, participants, moveToWaitingRoom,
       <p className="muted">{openSelection ? 'Attendees can choose their own rooms.' : 'Assigned participants move to their rooms.'}</p>
       {active.map(room => <section className="breakout-room" key={room.id || room.name}>
         <h3>{room.name}</h3>
+        {room.helpRequestedAt && <div className="breakout-actions">
+          <span role="status">Help requested</span>
+          <button className="button small" type="button" disabled={pending} aria-label={'Resolve help request for ' + room.name}
+            onClick={() => submit({ action: 'resolve-help', roomId: room.id })}>Mark resolved</button>
+        </div>}
         {!room.members.length && <p className="muted">No assigned participants</p>}
         {room.members.map(guest => <div className="breakout-guest" key={guest.identity}>
           <span>{guest.name}</span>
@@ -126,6 +132,7 @@ export function BreakoutRooms({ api, meetingId, participants, moveToWaitingRoom,
         </label>
         <button className="button" disabled={pending || !announcement.trim()}><Send size={15} /> Send announcement</button>
       </form>
+      {online && <BreakoutVoiceSender api={api} meetingId={meetingId} rooms={active} prefs={prefs} />}
       <div className="breakout-actions">
         <label>Return countdown
           <select value={closeDelay} onChange={event => setCloseDelay(event.target.value)}>

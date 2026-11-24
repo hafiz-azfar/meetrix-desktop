@@ -48,6 +48,10 @@ export function breakoutStore(db) {
     WHERE s.meeting = ? AND s.email_key = ? AND s.claimed = 0 AND room.closed_at IS NULL`);
   const claimScheduled = db.prepare('UPDATE breakout_scheduled_routes SET claimed = 1 WHERE meeting = ? AND email_key = ?');
   const clearScheduled = db.prepare('DELETE FROM breakout_scheduled_routes WHERE meeting = ?');
+  const requestHelp = db.prepare('INSERT OR IGNORE INTO breakout_help_requests(room, requested_at) VALUES(?, ?)');
+  const getHelp = db.prepare('SELECT requested_at AS requestedAt FROM breakout_help_requests WHERE room = ?');
+  const resolveHelp = db.prepare('DELETE FROM breakout_help_requests WHERE room = ?');
+  const clearHelp = db.prepare('DELETE FROM breakout_help_requests WHERE room IN (SELECT id FROM breakout_rooms WHERE meeting = ?)');
 
   function transaction(operation) {
     db.exec('BEGIN IMMEDIATE');
@@ -72,6 +76,9 @@ export function breakoutStore(db) {
     closesAt(meeting) { return readDeadline.get(meeting)?.closesAt ?? null; },
     scheduleClose(meeting, closesAt) { saveDeadline.run(meeting, closesAt); },
     due(now) { return dueDeadlines.all(now); },
+    askForHelp(room) { return !!requestHelp.run(room, Date.now()).changes; },
+    helpRequestedAt(room) { return getHelp.get(room)?.requestedAt ?? null; },
+    resolveHelp(room) { resolveHelp.run(room); },
     open(meeting, plan, selfSelect, closesAt, scheduled = []) {
       transaction(() => {
         if (selfSelect) enableSelection.run(meeting);
@@ -106,6 +113,7 @@ export function breakoutStore(db) {
         disableSelection.run(meeting);
         clearDeadline.run(meeting);
         clearScheduled.run(meeting);
+        clearHelp.run(meeting);
         return result;
       });
     },

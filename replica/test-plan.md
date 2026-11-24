@@ -76,6 +76,8 @@
 | F39-H1 | Audio settings records and plays a local sample. Ending capture stops the input track and discarding the sample clears playback | Workspace browser smoke test |
 | F38-H2 | Verified accounts enter their pre-assigned rooms only after admission. Late arrivals are matched and raw rosters are private | API and two-client LiveKit workspace smoke tests |
 | F32-H3 | Undo and redo change the displayed annotations on presenter and attendee clients. Attendees cannot edit the history | Multi-client LiveKit smoke test |
+| F40-H1 | A connected moderator’s voice reaches only the selected breakout room. Revoking a co-host or closing the rooms stops forwarding | API and multi-client LiveKit smoke tests |
+| F41-H1 | A breakout attendee can contact the host about their room and a moderator can resolve the request | API and multi-client LiveKit smoke tests |
 | F12-P1 | 100-person load, 30-hour duration, and production availability | Deployment-scale verification |
 
 Run `npm test` for the API suite. The RTC tests use two isolated browser pages and a real loopback LiveKit server. The desktop test is aimed at the Windows development build.

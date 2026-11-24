@@ -1,4 +1,4 @@
-# Meetrix 0.1.20 feature comparison
+# Meetrix 0.1.21 feature comparison
 
 | Area | Meetrix coverage | Remaining scope |
 |---|---|---|
@@ -6,7 +6,7 @@
 | Desktop preferences | Light, dark and system themes, four accent colors, chat text size and announcements, reduced motion, remappable in-app meeting shortcuts, caption size and contrast, minimize to tray, and scheduled meeting reminders | Broader desktop notifications |
 | Media preferences | Microphone meter and playback, test tone and volume, noise reduction, mirrored camera preview, local image backgrounds and blur, screen-share options, and Windows system audio with a display or as an audio-only share | Video backgrounds, green-screen controls, image filters, audio profiles, and native driver and hardware options |
 | In-call display and diagnostics | Fullscreen, elapsed-time display, participant filters, local camera pause, presentation layout, sampled WebRTC metrics with codec and jitter when available, local JSON export, and configurable push-to-talk | Dual-window layouts and broader network diagnostics |
-| Collaboration | In-room chat, raised hands, reactions, polls, whiteboard, notes, persistent team chat with threaded replies and scoped file downloads, presentation annotations with shape and text tools, presenter undo and redo, and PNG export, and breakout room plans with account-based pre-assignment, live assignment, self-selection, and timed returns | Individual annotation selection and editing, larger chat files and inline previews, and breakout voice broadcasts |
+| Collaboration | In-room chat, raised hands, reactions, polls, whiteboard, notes, persistent team chat with threaded replies and scoped file downloads, presentation annotation tools and PNG export, and breakout plans with pre-assignment, live assignment, self-selection, timed returns, live voice announcements, and help requests | Individual annotation selection and editing, larger chat files and inline previews, and moderator visits to breakouts |
 | Host controls | Waiting room re-entry and readmission, passcodes, lock, individual and bulk mute, ask to unmute, stop camera, remove, end, revocable co-host access, and explicit host transfer in standard meetings | Automatic host succession, transfer and waiting room re-entry in encrypted meetings, organization-wide policy, and independent security evaluation |
 | Recording and captions | Local WebM, opt-in hosted Egress and private MP4 downloads, manual and offline Windows English captions, per-attendee Hindi and Spanish translation, and caption history export | Live Egress and storage deployment verification, multilingual speech recognition, additional translation pairs, and long-form recordings |
 | Pro meeting features | 30-hour room cap, 100-participant configuration, optional end-to-end encryption, and on-device recaps from opted-in caption collection and draft summaries from selected English notes | Capacity/load verification and automatic room-wide transcription |
@@ -23,3 +23,5 @@ The comparison also covers caption language, desktop appearance and statistics, 
 The 0.1.18 comparison covers thread replies, files in team channels, and custom repeat options. [Zoom Team Chat threads](https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0066130) · [Zoom Team Chat files](https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0064413) · [Zoom recurring meetings](https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0064248)
 
 The 0.1.19 comparison adds recurring meeting edit scope and configuring breakout rooms before a call. [Zoom recurrence edits](https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0064248) · [Zoom breakout preparation](https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0061353)
+
+The 0.1.21 comparison adds moderator microphone announcements and attendee help requests. [Zoom breakout broadcasting](https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0062809) · [Zoom breakout participation](https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0060313)

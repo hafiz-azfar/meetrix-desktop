@@ -1,8 +1,12 @@
 import workletUrl from './speech-capture-worklet.js?url&no-inline';
 
 export async function captureCaptionAudio(track, onAudio, onError) {
+  return capturePcmAudio(track, onAudio, onError, 'automatic captions');
+}
+
+export async function capturePcmAudio(track, onAudio, onError, purpose) {
   if (track?.kind !== 'audio' || track.readyState !== 'live' || !track.enabled) {
-    throw new Error('Turn on your meeting microphone before starting automatic captions.');
+    throw new Error('Turn on your meeting microphone before starting ' + purpose + '.');
   }
 
   const context = new AudioContext({ sampleRate: 16000 });
@@ -25,7 +29,7 @@ export async function captureCaptionAudio(track, onAudio, onError) {
   }
 
   try {
-    if (!context.audioWorklet) throw new Error('This device cannot capture audio for automatic captions.');
+    if (!context.audioWorklet) throw new Error('This device cannot capture audio for ' + purpose + '.');
     await Promise.all([context.audioWorklet.addModule(workletUrl), context.resume()]);
     if (track.readyState !== 'live' || !track.enabled) throw new Error('Your meeting microphone is no longer active.');
     source = context.createMediaStreamSource(new MediaStream([track]));

@@ -528,6 +528,58 @@ try {
   await host.getByRole('button', { name: 'Send announcement' }).click();
   await host.getByText('Sent to 2 rooms.', { exact: true }).waitFor();
   for (const page of [guest, ...otherGuests]) await page.getByText('Host announcement · Wrap up your discussion.', { exact: true }).waitFor();
+  await guest.getByRole('button', { name: 'Ask for help', exact: true }).click();
+  await guest.getByText('Your room asked the host for help.', { exact: true }).waitFor();
+  await host.getByText('A breakout room asked for help. Open Breakouts to see the request.', { exact: true }).waitFor();
+  const resolveHelp = host.getByRole('button', { name: 'Resolve help request for Design' });
+  await resolveHelp.waitFor();
+  await resolveHelp.click();
+  await resolveHelp.waitFor({ state: 'detached' });
+
+  for (const page of [guest, ...otherGuests]) await page.evaluate(() => {
+    const start = AudioBufferSourceNode.prototype.start;
+    window.announcementBuffers = 0;
+    AudioBufferSourceNode.prototype.start = function (...args) {
+      if (this.buffer?.length === 4000 && this.buffer?.sampleRate === 16000 &&
+          this.buffer.getChannelData(0).some(sample => Math.abs(sample) > 0.01)) window.announcementBuffers++;
+      return start.apply(this, args);
+    };
+  });
+  await host.evaluate(() => {
+    const getMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+    navigator.mediaDevices.getUserMedia = async options => {
+      if (!options.audio || options.video) return getMedia(options);
+      navigator.mediaDevices.getUserMedia = getMedia;
+      const context = new AudioContext();
+      const tone = context.createOscillator();
+      const gain = context.createGain();
+      const output = context.createMediaStreamDestination();
+      gain.gain.value = 0.15;
+      tone.connect(gain).connect(output);
+      tone.start();
+      await context.resume();
+      window.testAnnouncementTrack = output.stream.getAudioTracks()[0];
+      window.testAnnouncementContext = context;
+      return output.stream;
+    };
+  });
+  await host.getByLabel('Voice announcement audience').selectOption({ label: 'Design' });
+  await host.getByRole('button', { name: 'Start voice announcement' }).click();
+  await host.getByText('Broadcasting to breakout rooms', { exact: true }).waitFor();
+  await Promise.all([guest, otherGuests[0]].map(async page => {
+    const enable = page.getByRole('button', { name: 'Enable voice announcements' });
+    const announcement = page.getByText('Moderator voice announcement', { exact: true });
+    await enable.or(announcement).first().waitFor();
+    if (await enable.isVisible()) await enable.click();
+    await announcement.waitFor();
+    await page.waitForFunction(() => window.announcementBuffers >= 2);
+  }));
+  assert.equal(await otherGuests[1].evaluate(() => window.announcementBuffers), 0);
+  assert.equal(await otherGuests[1].getByText('Moderator voice announcement', { exact: true }).count(), 0);
+  await host.getByRole('button', { name: 'Stop voice announcement' }).click();
+  await host.waitForFunction(() => window.testAnnouncementTrack.readyState === 'ended');
+  await host.evaluate(() => window.testAnnouncementContext.close());
+  await guest.getByText('Moderator voice announcement', { exact: true }).waitFor({ state: 'detached' });
   await host.getByLabel('Return countdown').selectOption('15');
   await host.getByRole('button', { name: 'Start return countdown' }).click();
   await host.getByRole('timer').filter({ hasText: 'Rooms close in' }).waitFor();
@@ -640,7 +692,7 @@ try {
   await delegate.getByRole('button', { name: 'Leave', exact: true }).click();
   await delegate.getByRole('button', { name: 'End for everyone' }).click();
   await guest.getByText('You are disconnected from this room.').waitFor();
-  console.log('Four-client meeting checks passed for caption preferences and translation, breakout countdowns and selection, annotation and statistics exports, and waiting room readmission.');
+  console.log('Four-client LiveKit checks passed for breakout voice isolation, help requests, countdowns and selection, captions, annotations, call statistics, and readmission.');
 } finally {
   await browser?.close();
   backend?.stop();
