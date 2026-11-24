@@ -86,6 +86,8 @@
 | F45-N1 | A reconnecting host, a room-service outage, a stale co-host SID, and an ordinary attendee do not trigger promotion. Presence checks follow a visiting host and role updates reach both rooms | API tests |
 | F46-H1 | An encrypted attendee returns from the waiting room with both devices off and can exchange encrypted in-room chat. Hosts can transfer from People and the leave dialog | `node test/smoke-encrypted-moderation.mjs` |
 | F46-N1 | An encrypted placement key alone cannot request a signed-in attendee's grant. Readmission is room-scoped and accountless users cannot become host | API tests |
+| F47-H1 | An encrypted co-host can moderate and succeed the host after the reconnect window. A microphone request leaves the recipient muted until they act | API and encrypted moderation smoke tests |
+| F47-N1 | Revoked and replaced media sessions lose delegated controls. An accountless guest cannot receive co-host access, and encrypted co-hosts cannot open breakout rooms | API and encrypted moderation smoke tests |
 | F12-P1 | 100-person load, 30-hour duration, and production availability | Deployment-scale verification |
 
 Run `npm test` for the API suite. The RTC tests use two isolated browser pages and a real loopback LiveKit server. The desktop test is aimed at the Windows development build.

@@ -186,16 +186,17 @@ function Call({ session, api, prefs, updatePrefs, onLeave, recap, connectionErro
   const host = localParticipant.identity ? localParticipant.identity === hostIdentity : session.meeting.isHost;
   const online = connection === ConnectionState.Connected;
   const ended = joinedAt != null && connection === ConnectionState.Disconnected;
-  const collaboration = !session.meeting.encrypted && !session.accountless && !session.breakoutName;
-  const meetingTools = !session.meeting.encrypted && !session.breakoutName;
+  const mainRoom = !session.breakoutName;
+  const meetingTools = !session.meeting.encrypted && mainRoom;
+  const collaboration = meetingTools && !session.accountless;
   const delegates = new Map(coHosts.map(({ identity, sid }) => [identity, sid]));
   const isCoHost = participant => !!participant.sid && delegates.get(participant.identity) === participant.sid;
   const roleOf = participant => participant.identity === hostIdentity ? 'Host' : isCoHost(participant) ? 'Co-host' : '';
-  const coHost = online && !host && !session.meeting.encrypted && !session.accountless && isCoHost(localParticipant);
+  const coHost = online && !host && !session.accountless && isCoHost(localParticipant);
   const canModerate = host || coHost;
   const canManageBreakouts = !session.meeting.encrypted && canModerate;
   const canOpenBreakouts = canManageBreakouts || breakoutChoices.length > 0;
-  const canTransferHost = host && !session.breakoutName;
+  const canTransferHost = host && mainRoom;
   const hostCandidates = confirmation && canTransferHost && online
     ? participants.filter(participant => !participant.isLocal && participant.sid && !participant.identity.startsWith('guest_')) : [];
   const selectedHost = hostCandidates.find(participant => participant.identity === nextHost);
@@ -308,7 +309,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, recap, connectionErro
         refreshPlacement();
         return;
       }
-      if (serverPacket && topic === microphoneRequestTopic && meetingTools && payload.byteLength === 1 && payload[0] === 1) {
+      if (serverPacket && topic === microphoneRequestTopic && mainRoom && payload.byteLength === 1 && payload[0] === 1) {
         if (!room.localParticipant.isMicrophoneEnabled) setMicrophoneRequest(true);
         return;
       }
@@ -350,7 +351,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, recap, connectionErro
       room.off(RoomEvent.Connected, refreshPlacement);
       room.off(RoomEvent.Disconnected, refreshPlacement);
     };
-  }, [room, refreshPlacement, session.meeting.encrypted, session.breakoutName, meetingTools, canModerate, updateRoles]);
+  }, [room, refreshPlacement, session.meeting.encrypted, session.breakoutName, mainRoom, canModerate, updateRoles]);
   useEffect(() => { chartEnd.current?.scrollIntoView({ block: 'nearest' }); }, [chat, panel]);
   useEffect(() => {
     if (!reaction) return;
@@ -669,12 +670,13 @@ function Call({ session, api, prefs, updatePrefs, onLeave, recap, connectionErro
           <div className="people-list">{participants.map(participant => <div className="person" key={participant.identity}><span className="person-avatar">{initials(participant.name || 'Guest')}</span>
             <div><strong>{participant.name || 'Guest'}{participant.isLocal && ' (you)'}</strong>{roleOf(participant) && <small>{roleOf(participant)}</small>}{participant.identity.startsWith('guest_') && <small>Unverified guest</small>}</div>
             {hands[participant.identity] && <Hand size={16} />}
-            {host && meetingTools && !participant.isLocal && !participant.identity.startsWith('guest_') && <button className="icon-button" disabled={!online || !participant.sid}
+            {host && mainRoom && !participant.isLocal && !participant.identity.startsWith('guest_') && <button className="icon-button" disabled={!online || !participant.sid}
               title={isCoHost(participant) ? 'Revoke co-host access' : 'Make co-host'}
               aria-label={(isCoHost(participant) ? 'Revoke co-host access for ' : 'Make co-host: ') + participant.name}
               onClick={() => {
                 const enabled = !isCoHost(participant);
-                if (enabled && !window.confirm('Let ' + (participant.name || 'this participant') + ' manage attendees, the waiting room, and breakout rooms?')) return;
+                const controls = meetingTools ? 'attendees, the waiting room, and breakout rooms' : 'attendees and the waiting room';
+                if (enabled && !window.confirm('Let ' + (participant.name || 'this participant') + ' manage ' + controls + ' and take over if you disconnect?')) return;
                 moderate({ action: 'co-host', identity: participant.identity, sid: participant.sid, enabled });
               }}>
               {isCoHost(participant) ? <ShieldMinus size={17} /> : <ShieldPlus size={17} />}
@@ -683,7 +685,7 @@ function Call({ session, api, prefs, updatePrefs, onLeave, recap, connectionErro
               disabled={!online || !participant.sid} title="Transfer host" aria-label={'Transfer host to ' + participant.name}
               onClick={() => transferHost(participant)}><Crown size={17} /></button>}
             {canModerate && !participant.isLocal && (host || !roleOf(participant)) && <>
-              {participant.isMicrophoneEnabled || !meetingTools
+              {participant.isMicrophoneEnabled || !mainRoom
                 ? <button className="icon-button" title="Mute participant" aria-label={'Mute ' + participant.name} onClick={() => moderate({ action: 'mute', identity: participant.identity })}><MicOff size={17} /></button>
                 : <button className="icon-button" title="Ask to unmute" aria-label={'Ask ' + participant.name + ' to unmute'} onClick={() => moderate({ action: 'ask-unmute', identity: participant.identity })}><Mic size={17} /></button>}
               {participant.isCameraEnabled && <button className="icon-button" title="Stop camera" aria-label={'Stop camera for ' + participant.name}

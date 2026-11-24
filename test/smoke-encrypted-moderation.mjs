@@ -62,13 +62,25 @@ try {
   const { id } = meetings.find(meeting => meeting.title === 'Encrypted moderation smoke');
   const path = `${origin}/api/meetings/${id}`;
 
-  await reader.goto(origin + '/join?m=' + id);
-  await reader.getByRole('button', { name: 'Continue', exact: true }).click();
-  await reader.getByRole('button', { name: 'Join now', exact: true }).click();
-  await host.getByRole('button', { name: 'Admit', exact: true }).click();
-  await reader.getByLabel('Room encryption key', { exact: true }).fill(key);
-  await reader.getByRole('button', { name: 'Join now', exact: true }).click();
-  await connected(reader);
+  async function joinReader(admit) {
+    await reader.goto(origin + '/join?m=' + id);
+    await reader.getByRole('button', { name: 'Continue', exact: true }).click();
+    await reader.getByRole('button', { name: 'Join now', exact: true }).click();
+    if (admit) await host.getByRole('button', { name: 'Admit', exact: true }).click();
+    await reader.getByLabel('Room encryption key', { exact: true }).fill(key);
+    await reader.getByRole('button', { name: 'Join now', exact: true }).click();
+    await connected(reader);
+  }
+  async function changeCoHost(enabled) {
+    const reply = host.waitForResponse(response => response.url() === path + '/moderate' && response.request().method() === 'POST');
+    if (enabled) host.once('dialog', dialog => dialog.accept());
+    await host.getByRole('button', { name: enabled ? 'Make co-host: Reader' : 'Revoke co-host access for Reader', exact: true }).click();
+    const response = await reply;
+    assert.equal(response.status(), 200, await response.text());
+    await reader.getByText('You’re a co-host', { exact: true }).waitFor({ state: enabled ? 'visible' : 'detached' });
+  }
+
+  await joinReader(true);
   await reader.getByText('Encrypted media', { exact: true }).waitFor();
   await reader.getByRole('button', { name: 'Camera', exact: true }).click();
   await reader.locator('button[aria-pressed="true"]').filter({ hasText: /^Camera$/ }).waitFor();
@@ -99,6 +111,21 @@ try {
     }));
   }
   await host.getByRole('button', { name: 'People 2', exact: true }).click();
+  await host.getByRole('button', { name: 'Ask Reader to unmute', exact: true }).click();
+  await reader.getByRole('button', { name: 'Turn on microphone', exact: true }).waitFor();
+  assert.ok(await reader.getByRole('button', { name: 'Unmute', exact: true }).isVisible());
+  await reader.getByRole('button', { name: 'Turn on microphone', exact: true }).click();
+  await reader.getByRole('button', { name: 'Mute', exact: true }).waitFor();
+  await reader.getByRole('button', { name: 'Mute', exact: true }).click();
+
+  await changeCoHost(true);
+  await reader.getByRole('button', { name: 'People 2', exact: true }).click();
+  await reader.getByRole('button', { name: 'Lock room', exact: true }).click();
+  await reader.getByRole('button', { name: 'Unlock room', exact: true }).click();
+  await reader.getByRole('button', { name: 'Lock room', exact: true }).waitFor();
+  await reader.screenshot({ path: resolve(output, 'meetrix-encrypted-co-host.png') });
+  await changeCoHost(false);
+  assert.equal((await reader.request.get(path + '/lobby')).status(), 403);
   host.once('dialog', dialog => dialog.accept());
   await host.getByRole('button', { name: 'Transfer host to Reader', exact: true }).click();
   await reader.getByText('You’re the host', { exact: true }).waitFor();
@@ -116,8 +143,23 @@ try {
   await dialog.getByRole('button', { name: 'Assign host and leave', exact: true }).click();
   await host.getByText('You’re the host', { exact: true }).waitFor();
   await reader.getByRole('button', { name: 'New meeting', exact: true }).waitFor();
+
+  await joinReader(false);
+  await changeCoHost(true);
+  await host.getByRole('button', { name: 'Leave', exact: true }).click();
+  await host.getByRole('button', { name: 'Leave room', exact: true }).click();
+  await host.getByRole('button', { name: 'New meeting', exact: true }).waitFor();
+  assert.equal(await reader.getByText('You’re the host', { exact: true }).count(), 0);
+  await reader.getByText('You’re the host', { exact: true }).waitFor({ timeout: 75000 });
+  await reader.getByText('Encrypted media', { exact: true }).waitFor();
+  assert.equal((await host.request.post(path + '/moderate', {
+    headers: { Origin: origin }, data: { action: 'end' },
+  })).status(), 403);
+  await reader.getByRole('button', { name: 'Leave', exact: true }).click();
+  await reader.getByRole('button', { name: 'End for everyone', exact: true }).click();
+  await reader.getByRole('button', { name: 'New meeting', exact: true }).waitFor();
   assert.equal(keySentToApi, false);
-  console.log('Encrypted call passed waiting-room readmission, device privacy, chat, direct host transfer, and transfer on exit.');
+  console.log('Encrypted call passed readmission, microphone consent, co-host revocation, manual transfer, and automatic succession.');
 } finally {
   await browser?.close();
   backend?.stop();

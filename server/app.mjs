@@ -162,7 +162,7 @@ export function createApp(options, dependencies = {}) {
   const saveBreakoutEmailKey = db.prepare('UPDATE attendance SET breakout_email_key = ? WHERE meeting = ? AND identity = ?');
   const findCoHost = db.prepare('SELECT sid FROM meeting_cohosts WHERE meeting = ? AND identity = ?');
   const listCoHosts = db.prepare('SELECT identity, sid FROM meeting_cohosts WHERE meeting = ? ORDER BY identity');
-  const meetingsWithCoHosts = db.prepare(`SELECT id FROM meetings WHERE id > ? AND opened_at > ? AND stopped_at IS NULL AND encrypted = 0
+  const meetingsWithCoHosts = db.prepare(`SELECT id FROM meetings WHERE id > ? AND opened_at > ? AND stopped_at IS NULL
     AND EXISTS (SELECT 1 FROM meeting_cohosts WHERE meeting = meetings.id) ORDER BY id LIMIT ?`);
   const absentHosts = new Map();
   const grantCoHost = db.prepare(`INSERT INTO meeting_cohosts(meeting, identity, sid) VALUES(?, ?, ?)
@@ -445,7 +445,7 @@ export function createApp(options, dependencies = {}) {
   }
   async function requireModerator(meeting, actor) {
     if (activeHost(meeting) === actor) return;
-    if (meetingEnded(meeting) || meeting.encrypted || !(await isActiveCoHost(meeting, actor))) {
+    if (meetingEnded(meeting) || !(await isActiveCoHost(meeting, actor))) {
       throw new RequestError(403, 'Only the host or a connected co-host can do that.');
     }
   }
@@ -597,7 +597,7 @@ export function createApp(options, dependencies = {}) {
   }
   function meetingRoles(meeting, roomId = meeting.id) {
     return { hostIdentity: activeHost(meeting), hostVersion: meeting.host_version,
-      coHosts: meeting.encrypted ? [] : listCoHosts.all(meeting.id).filter(({ identity }) =>
+      coHosts: listCoHosts.all(meeting.id).filter(({ identity }) =>
         roomId === meeting.id || breakouts.assigned(meeting.id, identity)?.id === roomId) };
   }
   function signalHostTransfer(meeting) {
@@ -1048,7 +1048,6 @@ export function createApp(options, dependencies = {}) {
       }
       let rolesChanged = false;
       if (command.action === 'co-host') {
-        if (current.encrypted) throw new RequestError(403, 'Co-hosts are unavailable in encrypted meetings.');
         if (command.enabled) {
           if (command.identity === hostIdentity) throw new RequestError(409, 'This participant is already the host.');
           admit(current, command.identity);
@@ -1099,7 +1098,8 @@ export function createApp(options, dependencies = {}) {
         await cloud?.stopMeeting(current, 'An attendee was removed.');
         setDecision.run('denied', current.id, command.identity);
         rolesChanged = !!revokeCoHost.run(current.id, command.identity).changes;
-        await removeFromRooms(participantRooms(current.id, command.identity), command.identity);
+        const cutoff = Math.floor(Date.now() / 1000) + 1;
+        await removeFromRooms(participantRooms(current.id, command.identity), command.identity, { revokeTokenTs: BigInt(cutoff) });
       }
       if (command.action === 'mute' || command.action === 'stop-video') {
         admit(current, command.identity);
@@ -1113,8 +1113,8 @@ export function createApp(options, dependencies = {}) {
         });
       }
       if (command.action === 'ask-unmute') {
-        if (current.encrypted || roomId !== current.id || breakouts.assigned(current.id, command.identity)) {
-          throw new RequestError(403, 'Microphone requests are available in the main room of standard meetings.');
+        if (roomId !== current.id || breakouts.assigned(current.id, command.identity)) {
+          throw new RequestError(403, 'Microphone requests are available in the main room.');
         }
         admit(current, command.identity);
         if (!(await mainParticipant(current, command.identity))) throw new RequestError(409, 'That attendee is no longer connected.');

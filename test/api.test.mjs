@@ -114,6 +114,8 @@ test('passcode, waiting room, authorization, narrow grants, lock, remove and end
   assert.equal((await connect(meeting.id, 'owner')).status, 200);
   await moderate(meeting.id, { action: 'lock', locked: false });
   assert.equal((await moderate(meeting.id, { action: 'remove', identity: 'guest' })).status, 200);
+  assert.ok(calls.some(([kind, room, identity, options]) => kind === 'remove' && room === meeting.id &&
+    identity === 'guest' && typeof options?.revokeTokenTs === 'bigint'));
   assert.equal((await connect(meeting.id, 'guest')).status, 403);
   assert.equal((await moderate(meeting.id, { action: 'end' })).status, 200);
   assert.equal((await moderate(meeting.id, { action: 'end' })).status, 200);
@@ -1156,7 +1158,8 @@ test('encrypted host transfer and readmission preserve session, room and role bo
   const visitor = (await joinGuest()).json;
   assert.equal((await place(visitor, '')).status, 200);
   assert.equal((await moderate(id, { action: 'transfer-host', identity: visitorIdentity, sid: 'PA_visitor' })).status, 409);
-  assert.equal((await moderate(id, { action: 'co-host', identity: 'guest', sid: 'PA_guest', enabled: true })).status, 403);
+  assert.equal((await moderate(id, { action: 'co-host', identity: visitorIdentity, sid: 'PA_visitor', enabled: true })).status, 403);
+  assert.equal((await moderate(id, { action: 'co-host', identity: 'guest', sid: 'PA_guest', enabled: true })).status, 409);
 
   assert.equal((await moderate(id, { action: 'wait', identity: 'guest' })).status, 200);
   assert.deepEqual((await place(guest, 'guest')).json, { waiting: true, placementEpoch: 1 });
@@ -1170,6 +1173,21 @@ test('encrypted host transfer and readmission preserve session, room and role bo
   assert.equal(claims.video.room, id);
   assert.ok(!claims.video.roomAdmin && !claims.video.roomRecord);
   livePeople.set('guest', { sid: 'PA_readmitted', state: ParticipantInfo_State.ACTIVE });
+  livePeople.set(visitorIdentity, { sid: 'PA_visitor', state: ParticipantInfo_State.ACTIVE });
+  const grant = { action: 'co-host', identity: 'guest', sid: 'PA_readmitted', enabled: true };
+  assert.equal((await moderate(id, grant, 'guest')).status, 403);
+  assert.equal((await moderate(id, grant)).status, 200);
+  assert.deepEqual((await place(guest, 'guest')).json.coHosts, [{ identity: 'guest', sid: 'PA_readmitted' }]);
+  assert.equal((await moderate(id, { action: 'end' }, 'guest')).status, 403);
+  assert.equal((await moderate(id, { action: 'mute', identity: 'owner' }, 'guest')).status, 403);
+  assert.equal((await api(path + '/lobby', { token: 'guest' })).status, 200);
+  assert.equal((await moderate(id, { action: 'ask-unmute', identity: visitorIdentity }, 'guest')).status, 200);
+  assert.deepEqual(calls.at(-1), ['data', id, { topic: 'meetrix.microphone-request', destinationIdentities: [visitorIdentity] }]);
+  assert.equal((await api(path + '/breakouts', {
+    token: 'guest', method: 'POST', body: { action: 'open', selfSelect: true, rooms: [{ name: 'Review', members: [] }] },
+  })).status, 403);
+  assert.equal((await moderate(id, { ...grant, enabled: false })).status, 200);
+  assert.equal((await api(path + '/lobby', { token: 'guest' })).status, 403);
   const transfer = { action: 'transfer-host', identity: 'guest', sid: 'PA_readmitted' };
   assert.equal((await moderate(id, transfer, 'guest')).status, 403);
   assert.equal((await moderate(id, { ...transfer, sid: 'PA_old' })).status, 409);
@@ -1186,6 +1204,41 @@ test('encrypted host transfer and readmission preserve session, room and role bo
   assert.equal((await api(path + '/notes', { token: 'guest' })).status, 403);
   assert.equal((await moderate(id, { action: 'end' }, 'guest')).status, 200);
   assert.equal((await place(guest, 'guest')).status, 410);
+});
+
+test('encrypted host succession requires a current co-host connection and an absent host', async t => {
+  const { create, connect, moderate, api, livePeople, checkHostContinuity } = await fixture(t);
+  const { id } = (await create({ encrypted: true, lobby: false })).json;
+  const path = '/meetings/' + id;
+  const open = actor => connect(id, actor, { keyReady: true });
+  const placement = session => api(path + '/placement', { method: 'POST', token: 'guest', body: { key: session.routingKey, roomId: id } });
+  const publish = (identity, sid) => livePeople.set(identity, { identity, sid, state: ParticipantInfo_State.ACTIVE });
+  await open('owner');
+  const guest = (await open('guest')).json;
+  publish('owner', 'PA_owner');
+  publish('guest', 'PA_guest');
+  const assignment = sid => moderate(id, { action: 'co-host', identity: 'guest', sid, enabled: true });
+  assert.equal((await assignment('PA_guest')).status, 200);
+  await checkHostContinuity(0);
+  livePeople.delete('owner');
+  await checkHostContinuity(1000);
+  await checkHostContinuity(30999);
+  assert.equal((await placement(guest)).json.hostVersion, 0);
+
+  publish('guest', 'PA_resumed');
+  await checkHostContinuity(31000);
+  assert.equal((await placement(guest)).json.hostIdentity, 'owner');
+  assert.equal((await moderate(id, { action: 'lock', locked: true }, 'guest')).status, 403);
+  assert.equal((await assignment('PA_resumed')).status, 200);
+  await checkHostContinuity(32000);
+  const promoted = (await placement(guest)).json;
+  assert.equal(promoted.hostIdentity, 'guest');
+  assert.equal(promoted.hostVersion, 1);
+  assert.deepEqual(promoted.coHosts, []);
+  assert.equal(promoted.token, undefined);
+  assert.equal((await open('owner')).json.meeting.isHost, false);
+  assert.equal((await moderate(id, { action: 'end' })).status, 403);
+  assert.equal((await moderate(id, { action: 'end' }, 'guest')).status, 200);
 });
 
 test('shared notes require access and reject stale writes; encrypted rooms skip stored notes', async t => {

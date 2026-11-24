@@ -43,5 +43,6 @@ F41,Pro,Breakout requests for help,should,yes,partial,Participants request help 
 F42,Pro,Moderator visits during breakouts,should,yes,yes,Hosts and co-hosts visit open rooms and retain their approved role across media reconnects
 F43,Pro,Live reassignment between breakout rooms,should,yes,yes,Moderators can move an admitted attendee between rooms or the main meeting while rooms are open
 F44,Meetings,Assign a host and leave,should,yes,yes,Host can choose a connected signed-in attendee from the leave dialog
-F45,Meetings,Automatic host succession,should,yes,partial,Standard meetings can promote an active co-host after a reconnect window. Promotion is limited to delegated participants
+F45,Meetings,Automatic host succession,should,yes,partial,Standard and encrypted meetings can promote an active co-host after a reconnect window. Promotion is limited to delegated participants
 F46,Meetings,Encrypted host transfer and waiting-room readmission,should,yes,yes,Uses authenticated role and placement updates while the shared media key remains on the devices
+F47,Meetings,Encrypted co-host controls and microphone requests,should,yes,yes,Connected signed-in co-hosts can moderate. Participants can consent to a targeted microphone request
